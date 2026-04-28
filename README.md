@@ -1,5 +1,7 @@
 # 판자촌 (Shantytown)
 
+[한국어](README.md) · [English](docs/README.en.md) · [简体中文](docs/README.zh-CN.md)
+
 DMM Game Player 대체 런처입니다. 게임마다 다른 DMM 계정(프로필)을 지정해서 실행할 수 있습니다.  
 이미 설치된 DMM 게임은 일본 국외에서도 VPN 없이 실행할 수 있습니다.
 
