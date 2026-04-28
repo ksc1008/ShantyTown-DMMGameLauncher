@@ -214,3 +214,40 @@ def test_token_encrypted_on_disk_when_dpapi_supported(store_path):
     # And it round-trips back through a fresh load.
     s2 = ProfileStore(store_path)
     assert s2.list()[0].token == "super-secret-token-12345"
+
+
+def test_auto_migrates_legacy_plaintext_on_open(store_path):
+    """A pre-DPAPI profiles.json with plaintext tokens gets re-saved
+    in encrypted form the first time it's loaded, without requiring
+    any user action."""
+    import sys
+
+    if sys.platform != "win32":
+        pytest.skip("DPAPI only on Windows")
+    import json
+    from datetime import UTC, datetime
+
+    legacy = {
+        "version": 1,
+        "default_profile_id": "p1",
+        "profiles": [
+            {
+                "id": "p1",
+                "name": "alice",
+                "token": "legacy-plaintext-12345",
+                "email": None,
+                "created_at": datetime.now(UTC).isoformat(),
+                "last_used_at": None,
+            }
+        ],
+    }
+    store_path.write_text(json.dumps(legacy), encoding="utf-8")
+
+    # Just opening the store should rewrite the file in encrypted form.
+    s = ProfileStore(store_path)
+    assert s.list()[0].token == "legacy-plaintext-12345"  # decrypted in memory
+
+    on_disk = json.loads(store_path.read_text(encoding="utf-8"))
+    on_disk_token = on_disk["profiles"][0]["token"]
+    assert "legacy-plaintext-12345" not in on_disk_token
+    assert on_disk_token.startswith("dpapi:v1:")

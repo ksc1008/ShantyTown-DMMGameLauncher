@@ -65,7 +65,15 @@ class ProfileStore:
 
     def __init__(self, path: Path) -> None:
         self._path = path
+        # ``_load`` flips ``_has_plaintext_tokens`` to True if any
+        # token in the file lacks the DPAPI marker. We use that to
+        # trigger an immediate re-save below so existing users get
+        # their tokens encrypted at rest on the very next boot after
+        # upgrading — without waiting for a profile mutation.
+        self._has_plaintext_tokens = False
         self._data = self._load()
+        if secure_storage.is_supported() and self._has_plaintext_tokens:
+            self._save()
 
     # --- public API ---
 
@@ -148,7 +156,24 @@ class ProfileStore:
             raw = json.loads(self._path.read_text(encoding="utf-8"))
             if not isinstance(raw, dict):
                 raise ValueError("expected a JSON object at the root")
-            profiles = [self._dict_to_profile(p) for p in raw.get("profiles", [])]
+            raw_profiles = raw.get("profiles", [])
+            # Inspect raw token strings BEFORE _dict_to_profile decrypts
+            # them, so we can tell whether the file on disk holds any
+            # legacy plaintext tokens (no ``dpapi:v1:`` marker). The
+            # ``__init__`` caller uses the flag to schedule a one-shot
+            # re-save that migrates them to encrypted form.
+            for entry in raw_profiles:
+                if not isinstance(entry, dict):
+                    continue
+                t = entry.get("token")
+                if (
+                    isinstance(t, str)
+                    and t
+                    and not t.startswith(secure_storage.PREFIX)
+                ):
+                    self._has_plaintext_tokens = True
+                    break
+            profiles = [self._dict_to_profile(p) for p in raw_profiles]
         except (json.JSONDecodeError, ValueError, TypeError, KeyError, OSError):
             self._backup_corrupted()
             return _StoreData(

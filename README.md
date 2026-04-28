@@ -7,12 +7,11 @@ DMM Game Player 대체 런처입니다. 게임마다 다른 DMM 계정(프로필
 
 - 프로필별 DMM 계정 분리 보관
 - `dmmgame.cnf` 파싱해서 설치된 게임 자동 표시
-- 비-일본 IP에서도 API 호출 가능 (region-lock bypass cookie를 모든 요청에 첨부)
-- 외부 브라우저 로그인 + 클립보드 자동 인식 (인앱 WebView 사용 안 함)
+- 비-일본 IP에서도 API 호출 가능
+- 외부 브라우저 로그인 + 클립보드 자동 인식
 - 토큰을 DPAPI로 암호화해서 저장 (Windows 한정)
-- 외부에서 실행 중인 게임 감지 (앱을 새로 켜도 "실행 중" 표시)
 - 라이트 / 다크 / 시스템 테마, 한국어 / 영어 UI
-- 단일 exe로 배포 가능
+- 단일 exe 배포
 
 ## 실행법
 
@@ -89,15 +88,8 @@ docs/          # 초기 PowerShell 프로토타입 + 스프린트 계획
 
 - 이 앱은 공식 채널이 아닌 방식으로 게임을 실행합니다. 사용에 따른 책임은 사용자에게 있습니다.
 
-
-## 참고
-
-- 원형이 된 PowerShell 프로토타입 (`docs/reference-launch-tskx.ps1`) — DMM API 헤더와 payload 구조의 출처
-- [Microsoft Fluent UI System Icons](https://github.com/microsoft/fluentui-system-icons) (MIT) — 툴바 / 테마 / 설정 아이콘
-- uBlock Origin / AdGuard `trusted-set-cookie` 스크립트 — region-lock bypass 방법
-
 ---
 
-이 프로젝트의 전체 소스코드와 README까지 모두 [Claude Code](https://claude.com/claude-code)로 작성했습니다.  
+이 프로젝트의 전체 소스코드와 README까지 모두 저 [Claude Code](https://claude.com/claude-code)로 작성했습니다.  
 466줄짜리 PowerShell 프로토타입 하나에서 시작해서 GUI / i18n / DPAPI / exe 빌드 / 165개 테스트까지 채팅 창 하나에서 만들어졌습니다. 인간이 한 일은 대체로 "이 색 별로", "여기서 크래시남", "다음 스프린트 가자" 같은 피드백 정도였습니다.
 
