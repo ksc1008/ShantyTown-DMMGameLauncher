@@ -1,0 +1,34 @@
+{
+  "games": {
+    "tskx": {
+      "displayName": "Twinkle☆Star Knights X",
+      "exeNameCandidates": ["twinkle_starknightsx.exe"],
+      "tags": ["RPG", "Action"],
+      "iconUrl": null
+    },
+    "muv_luv_girlsgardenx_cl": {
+      "displayName": "Muv-Luv Girls Garden X",
+      "exeNameCandidates": ["girlsgardenx.exe", "muv_luv_girlsgardenx.exe"],
+      "tags": [],
+      "iconUrl": null
+    },
+    "dotabyss_x_cl": {
+      "displayName": "DotAbyss X",
+      "exeNameCandidates": ["dotabyss_x.exe", "dotabyss.exe"],
+      "tags": [],
+      "iconUrl": null
+    },
+    "girlscreation_r": {
+      "displayName": "Girls Creation R",
+      "exeNameCandidates": ["girlscreation_r.exe", "girlscreation.exe"],
+      "tags": [],
+      "iconUrl": null
+    },
+    "rlyehshoujotaix_cl": {
+      "displayName": "R'lyeh Shoujo Tai X",
+      "exeNameCandidates": ["rlyehshoujotaix.exe", "rlyeh.exe"],
+      "tags": [],
+      "iconUrl": null
+    }
+  }
+}

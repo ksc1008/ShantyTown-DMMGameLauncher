@@ -1,0 +1,40 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.egg-info/
+.eggs/
+build/
+dist/
+*.egg
+*.spec
+
+# venvs / package managers
+.venv/
+venv/
+env/
+.uv/
+uv.lock.bak
+
+# tooling caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.tox/
+.coverage
+htmlcov/
+
+# editors
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+Thumbs.db
+.DS_Store
+
+# project-local secrets / runtime artifacts
+*.log
+profiles.json
+games.json
