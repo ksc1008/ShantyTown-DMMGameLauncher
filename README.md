@@ -23,6 +23,14 @@ Release 탭에서 최신 버전의 `shantytown.exe`를 다운로드해서 실행
 
 앱 첫 실행 시 표시되는 안내와 동일한 내용입니다.
 
+| 단계 | 화면 |
+  | --- | --- |
+  | 1. 게임 설치 | <img src="src/shantytown/resources/tutorial/tutorial_01_dmm_launcher.png" width="400"> |
+  | 2. 프로필 만들기 | <img src="src/shantytown/resources/tutorial/tutorial_02_profiles.png" width="400"> |
+  | 3. 게임 목록 | <img src="src/shantytown/resources/tutorial/tutorial_03_main_grid.png" width="400"> |
+  | 4. 실행 | <img src="src/shantytown/resources/tutorial/tutorial_04_launch.png" width="400"> |
+  | 5. DMM 로그인 | <img src="src/shantytown/resources/tutorial/tutorial_05_login.png" width="400"> |
+
 1. 필요한 게임을 DMM Game Player에서 설치합니다. (다운로드 시 VPN이 필요할 수 있습니다.)
 2. 사용할 DMM 계정별로 프로필을 생성합니다.
 3. PC에 설치된 게임은 자동으로 메인 화면에 표시됩니다.
