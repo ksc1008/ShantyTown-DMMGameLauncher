@@ -8,9 +8,12 @@ thread only handles signals.
 from __future__ import annotations
 
 import subprocess
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import UTC, datetime
 from pathlib import Path
+from urllib.parse import urljoin
 
+import httpx
 from PyQt6.QtCore import QObject, QThread, pyqtSignal
 
 from shantytown.core.api import (
@@ -20,11 +23,17 @@ from shantytown.core.api import (
     GameNotLinkedError,
 )
 from shantytown.core.debug import is_debug
-from shantytown.core.download import DownloadProgress, download_file
+from shantytown.core.download import download_file
 from shantytown.core.hwid import get_default_hardware_ids
 from shantytown.core.i18n import t
 from shantytown.core.models import HardwareIds
-from shantytown.core.verify import verify_files
+from shantytown.core.verify import VerificationResult, verify_files
+
+# Sweet spot for CDN-backed downloads: enough parallelism to keep TCP
+# slow-start from dominating per-file time, low enough that CloudFront-
+# style providers don't rate-limit a single source IP. The official
+# clients (Steam / DMM Game Player / EGS) sit in the same band.
+DOWNLOAD_CONCURRENCY = 6
 
 
 class TokenCheckWorker(QObject):
@@ -158,46 +167,10 @@ class LaunchWorker(QObject):
 
         needs = [r for r in results if r.needs_download]
         if needs:
-            total_dl = len(needs)
-            for idx, r in enumerate(needs, start=1):
-                if self._interrupted():
-                    self.finished.emit(False, cancelled, None)
-                    return
-                self.progress.emit(
-                    t("worker.downloading.path", path=r.file.local_path),
-                    idx - 1,
-                    total_dl,
-                )
-                url = f"{cdn_domain.rstrip('/')}{r.file.remote_path}"
-                dest = self._install_dir / r.file.local_path
-
-                def dl_cb(
-                    p: DownloadProgress,
-                    _idx: int = idx,
-                    _total: int = total_dl,
-                ) -> None:
-                    pct = (
-                        int((p.bytes_received / p.total_bytes) * 100)
-                        if p.total_bytes
-                        else 0
-                    )
-                    self.progress.emit(
-                        t(
-                            "worker.downloading.progress",
-                            idx=_idx,
-                            total=_total,
-                            file_name=p.file_name,
-                        ),
-                        pct,
-                        100,
-                    )
-
-                download_file(
-                    url,
-                    dest,
-                    cookie=launch.cdn_sign,
-                    progress_cb=dl_cb,
-                )
+            self._parallel_download(needs, cdn_domain, launch.cdn_sign)
+            if self._interrupted():
+                self.finished.emit(False, cancelled, None)
+                return
 
         if self._interrupted():
             self.finished.emit(False, cancelled, None)
@@ -207,6 +180,76 @@ class LaunchWorker(QObject):
         self.progress.emit(t("worker.launching"), 0, 0)
         popen = self._spawn_game(launch.execute_args)
         self.finished.emit(True, t("worker.launching"), popen)
+
+    def _parallel_download(
+        self,
+        needs: list[VerificationResult],
+        cdn_domain: str,
+        cdn_sign: str,
+    ) -> None:
+        """Download all entries in parallel, respecting cancellation.
+
+        Uses ``ThreadPoolExecutor`` with ``DOWNLOAD_CONCURRENCY`` workers
+        because:
+
+        - Each download is independent — different ``dest`` path, no
+          shared mutable state. ``httpx.Client`` is thread-safe by spec.
+        - TCP slow-start dominates per-file time on small assets;
+          parallel streams amortise the ramp-up.
+        - CloudFront-style CDNs cap per-connection bandwidth; multiple
+          connections add up.
+
+        Progress is reported as ``(done / total)`` rather than per-file
+        chunk percentages — too many in-flight streams to show
+        individual progress sensibly. A failure on any single file
+        cancels still-pending futures and propagates; in-flight
+        downloads finish naturally (``Future.cancel`` doesn't interrupt
+        running work, but they're chunked-streamed so each completes
+        within seconds).
+
+        MD5 verification is the safety net — if a parallel write
+        somehow corrupts a file, the next launch's verify pass catches
+        it and re-downloads. No data-corruption risk in practice.
+        """
+        total = len(needs)
+
+        def _agg_label(done: int) -> str:
+            return t("worker.downloading.aggregate", done=done, total=total)
+
+        self.progress.emit(_agg_label(0), 0, total)
+
+        def _worker(entry: VerificationResult) -> None:
+            if self._interrupted():
+                return
+            url = urljoin(cdn_domain, entry.file.remote_path)
+            dest = self._install_dir / entry.file.local_path
+            try:
+                download_file(url, dest, cookie=cdn_sign)
+            except httpx.HTTPError as e:
+                raise RuntimeError(
+                    f"download failed for {url}\n{type(e).__name__}: {e}"
+                ) from e
+
+        completed = 0
+        with ThreadPoolExecutor(max_workers=DOWNLOAD_CONCURRENCY) as pool:
+            futures = [pool.submit(_worker, n) for n in needs]
+            try:
+                for fut in as_completed(futures):
+                    if self._interrupted():
+                        for f in futures:
+                            if not f.done():
+                                f.cancel()
+                        return
+                    fut.result()  # surfaces any worker exception
+                    completed += 1
+                    self.progress.emit(
+                        _agg_label(completed), completed, total
+                    )
+            except Exception:
+                for f in futures:
+                    if not f.done():
+                        f.cancel()
+                raise
 
     def _spawn_game(self, execute_args: str) -> subprocess.Popen[bytes]:
         """Start the game executable, detached from this process.

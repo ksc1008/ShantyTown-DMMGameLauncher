@@ -225,6 +225,27 @@ def test_get_filelist_accepts_absolute_url(client, httpx_mock: HTTPXMock):
     assert domain == "d"
 
 
+def test_get_filelist_handles_missing_leading_slash(
+    client, httpx_mock: HTTPXMock
+):
+    """Regression: when the file_list_url comes back without a leading
+    slash, ``urljoin`` should treat it as relative-to-root rather than
+    appending it to the host, which would produce the malformed
+    ``apidgp-...comv5/...`` host that fails ``getaddrinfo``."""
+    httpx_mock.add_response(
+        method="GET",
+        url=f"{BASE}/v5/r2/launch/filelist",
+        json={"data": {"domain": "d", "file_list": []}},
+    )
+    # Note: no leading slash on the path
+    _entries, domain = client.get_filelist("tok", "v5/r2/launch/filelist")
+    assert domain == "d"
+    # The mock would never have matched if the URL had been mangled.
+    req = httpx_mock.get_request()
+    assert req is not None
+    assert req.url.host == "apidgp-gameplayer.games.dmm.com"
+
+
 def test_retries_on_5xx_then_succeeds(client, httpx_mock: HTTPXMock):
     url = f"{BASE}/v5/auth/accesstoken/issue"
     httpx_mock.add_response(method="POST", url=url, status_code=502)

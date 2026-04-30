@@ -173,6 +173,7 @@ _STRINGS_KO: Final[dict[str, str]] = {
     "worker.verifying": "파일 검증 중",
     "worker.downloading.path": "다운로드 ({path})",
     "worker.downloading.progress": "다운로드 ({idx}/{total}) {file_name}",
+    "worker.downloading.aggregate": "다운로드 중 ({done} / {total})",
     "worker.launching": "게임 실행 중…",
     "worker.detail_separator": "--- 응답 본문 ---",
 }
@@ -330,6 +331,7 @@ _STRINGS_EN: Final[dict[str, str]] = {
     "worker.verifying": "Verifying files",
     "worker.downloading.path": "Downloading ({path})",
     "worker.downloading.progress": "Downloading ({idx}/{total}) {file_name}",
+    "worker.downloading.aggregate": "Downloading ({done} / {total})",
     "worker.launching": "Launching…",
     "worker.detail_separator": "--- Response body ---",
 }

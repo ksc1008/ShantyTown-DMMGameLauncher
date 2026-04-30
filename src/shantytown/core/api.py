@@ -13,6 +13,7 @@ import time
 from collections.abc import Callable
 from types import TracebackType
 from typing import Any, ClassVar
+from urllib.parse import urljoin
 
 import httpx
 
@@ -274,11 +275,10 @@ class DmmApiClient:
         self, token: str, file_list_url: str
     ) -> tuple[list[FileEntry], str]:
         """Fetch the CDN file list. Returns ``(entries, cdn_domain)``."""
-        url = (
-            file_list_url
-            if file_list_url.startswith("http")
-            else f"{self.BASE}{file_list_url}"
-        )
+        # ``urljoin`` handles all the edge cases: absolute URL passes
+        # through unchanged, leading-slash relative replaces the path,
+        # missing-slash relative is treated as relative to the root.
+        url = urljoin(self.BASE, file_list_url)
         extra = {"actauth": token}
         raw = self._request("GET", url, extra_headers=extra)
 
