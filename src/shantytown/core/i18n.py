@@ -148,6 +148,22 @@ _STRINGS_KO: Final[dict[str, str]] = {
     "game_settings.missing.body": (
         "'{path}' 파일이 존재하지 않습니다. 그래도 저장할까요?"
     ),
+    "game_settings.display_name_label": "표시 이름",
+    "game_settings.display_name_placeholder": "기본값 사용 ({default})",
+    "game_settings.create_shortcut": "바탕화면에 바로가기 만들기",
+    "game_settings.creating_shortcut": "생성중",
+    "game_settings.shortcut.success.title": "바로가기 생성 완료",
+    "game_settings.shortcut.success.body": (
+        "바탕화면에 '{name}' 바로가기를 만들었습니다."
+    ),
+    "game_settings.shortcut.failed.title": "바로가기 생성 실패",
+    "game_settings.shortcut.failed.body": "바로가기를 만들지 못했습니다: {error}",
+    # --- silent launch (--launch=<id> from desktop shortcut) ---
+    "silent_launch.not_installed.title": "게임이 설치되어 있지 않음",
+    "silent_launch.not_installed.body": (
+        "'{product_id}' 게임이 DMM Game Player에 설치되어 있지 않습니다.\n"
+        "공식 런처에서 먼저 설치한 뒤 다시 시도해주세요."
+    ),
     # --- progress dialog ---
     "progress.preparing": "준비 중…",
     "progress.failed": "실패: {message}",
@@ -307,6 +323,21 @@ _STRINGS_EN: Final[dict[str, str]] = {
     "game_settings.missing.title": "File missing",
     "game_settings.missing.body": (
         "'{path}' does not exist. Save anyway?"
+    ),
+    "game_settings.display_name_label": "Display name",
+    "game_settings.display_name_placeholder": "Use default ({default})",
+    "game_settings.create_shortcut": "Create desktop shortcut",
+    "game_settings.creating_shortcut": "Creating",
+    "game_settings.shortcut.success.title": "Shortcut created",
+    "game_settings.shortcut.success.body": (
+        "Created a desktop shortcut for '{name}'."
+    ),
+    "game_settings.shortcut.failed.title": "Shortcut creation failed",
+    "game_settings.shortcut.failed.body": "Could not create the shortcut: {error}",
+    "silent_launch.not_installed.title": "Game not installed",
+    "silent_launch.not_installed.body": (
+        "'{product_id}' isn't installed via DMM Game Player.\n"
+        "Install it through the official client first, then try again."
     ),
     "progress.preparing": "Preparing…",
     "progress.failed": "Failed: {message}",

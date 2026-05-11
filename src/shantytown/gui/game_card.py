@@ -226,9 +226,16 @@ class GameCard(QFrame):
         profiles: list[Profile],
         default_profile: Profile | None,
     ) -> None:
-        title_text = (
-            known.display_name if known is not None else self._installed.product_id
-        )
+        # Title precedence:
+        #   1. user override saved on the GameConfig (rename feature)
+        #   2. bundled known_games display name
+        #   3. fall back to the raw product_id
+        if config is not None and config.display_name:
+            title_text = config.display_name
+        elif known is not None:
+            title_text = known.display_name
+        else:
+            title_text = self._installed.product_id
 
         root = QVBoxLayout(self)
         root.setContentsMargins(14, 12, 14, 12)

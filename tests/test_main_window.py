@@ -182,6 +182,30 @@ def test_compute_state_no_token_is_login_required(tmp_path):
     assert state is CardState.NEEDS_LOGIN
 
 
+def test_show_toast_spawns_toast_widget(qtbot, fresh_stores):
+    """``MainWindow.show_toast`` plants a ``Toast`` on the central widget
+    so the slide-down lives inside the main window's z-stack."""
+    from shantytown.gui.toast import Toast
+
+    profile_store, game_store = fresh_stores
+    api = MagicMock(spec=DmmApiClient)
+    window = MainWindow(
+        api=api,
+        profile_store=profile_store,
+        game_store=game_store,
+        cnf_path=FIXTURE_CNF,
+    )
+    qtbot.addWidget(window)
+    window.show()
+
+    window.show_toast("Saved!")
+
+    central = window.centralWidget()
+    assert central is not None
+    toasts = [c for c in central.findChildren(Toast)]
+    assert len(toasts) == 1
+
+
 def test_compute_state_with_token_is_ready(tmp_path):
     from datetime import UTC, datetime
 

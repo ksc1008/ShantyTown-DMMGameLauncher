@@ -25,6 +25,9 @@ class GameConfig:
     ``exe_path = None`` means "not yet configured" — the game card in
     the GUI shows a "setup needed" badge and clicks open the wizard.
     ``profile_id = None`` means "use the default profile."
+    ``display_name = None`` means "use the bundled known_games name (or
+    fall back to ``product_id``)" — the user can override via the
+    game settings dialog.
     """
 
     product_id: str
@@ -32,6 +35,7 @@ class GameConfig:
     profile_id: str | None = None
     favorite: bool = False
     last_played_at: datetime | None = None
+    display_name: str | None = None
 
 
 class GameStoreError(RuntimeError):
@@ -120,6 +124,7 @@ class GameStore:
             "last_played_at": (
                 c.last_played_at.isoformat() if c.last_played_at else None
             ),
+            "display_name": c.display_name,
         }
 
     @staticmethod
@@ -128,6 +133,7 @@ class GameStore:
             raise TypeError("game entry must be a JSON object")
         exe_raw = d.get("exe_path")
         last_played_raw = d.get("last_played_at")
+        display_raw = d.get("display_name")
         return GameConfig(
             product_id=str(d["product_id"]),
             exe_path=Path(str(exe_raw)) if exe_raw else None,
@@ -138,6 +144,11 @@ class GameStore:
             last_played_at=(
                 datetime.fromisoformat(str(last_played_raw))
                 if last_played_raw
+                else None
+            ),
+            display_name=(
+                str(display_raw).strip()
+                if isinstance(display_raw, str) and display_raw.strip()
                 else None
             ),
         )

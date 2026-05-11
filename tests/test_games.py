@@ -83,6 +83,50 @@ def test_delete_unknown_raises(store_path):
         s.delete("no-such-product")
 
 
+def test_display_name_round_trips(store_path):
+    s = GameStore(store_path)
+    s.upsert(GameConfig(product_id="tskx", display_name="My Custom Name"))
+    s2 = GameStore(store_path)
+    cfg = s2.get("tskx")
+    assert cfg is not None
+    assert cfg.display_name == "My Custom Name"
+
+
+def test_display_name_defaults_to_none(store_path):
+    s = GameStore(store_path)
+    s.upsert(GameConfig(product_id="tskx"))
+    s2 = GameStore(store_path)
+    assert s2.get("tskx").display_name is None
+
+
+def test_display_name_blank_string_treated_as_none(store_path):
+    """Whitespace-only override should be ignored — the user clearing
+    the field should bring the bundled / product_id name back, not
+    produce a blank title."""
+    import json
+
+    store_path.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "games": [
+                    {
+                        "product_id": "tskx",
+                        "exe_path": None,
+                        "profile_id": None,
+                        "favorite": False,
+                        "last_played_at": None,
+                        "display_name": "   ",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    s = GameStore(store_path)
+    assert s.get("tskx").display_name is None
+
+
 def test_corrupt_json_backed_up(store_path):
     store_path.write_text("not json", encoding="utf-8")
     s = GameStore(store_path)

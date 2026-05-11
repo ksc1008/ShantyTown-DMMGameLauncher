@@ -65,6 +65,7 @@ from .login_dialog import LoginDialog
 from .profile_dialog import ProfileDialog
 from .progress_dialog import ProgressDialog
 from .theme import apply_theme
+from .toast import Toast
 from .tutorial_dialog import TutorialDialog
 from .workers import LaunchWorker, utc_now
 
@@ -151,6 +152,14 @@ class MainWindow(QMainWindow):
         self._cached_installed: list[InstalledGame] = []
         self._current_cols: int = 1
         self._initial_layout_done: bool = False
+        # Silent-launch mode. Set by ``begin_silent_launch`` when the
+        # app is started via ``--launch=<id>`` (a desktop shortcut).
+        # While true, a successful spawn calls ``QApplication.quit()``
+        # so the launcher exits cleanly, leaving only the game running.
+        # Any path that has to surface UI (errors, missing config, login
+        # required) flips it back to false — once the user can see the
+        # main window, they're in control and we don't auto-quit.
+        self._silent_mode: bool = False
 
         self._build_ui()
         self.refresh()
@@ -455,6 +464,15 @@ class MainWindow(QMainWindow):
     def _open_tutorial(self) -> None:
         TutorialDialog(self).exec()
 
+    def show_toast(self, message: str) -> None:
+        """Slide a brief positive notification down from the top of the
+        main window. Replaces modal "success!" QMessageBox prompts for
+        low-stakes confirmations like "shortcut created"."""
+        central = self.centralWidget()
+        if central is None:
+            return
+        Toast(central, message).show_animated()
+
     # --- card actions ---
 
     def _on_status_clicked(self, product_id: str) -> None:
@@ -550,6 +568,10 @@ class MainWindow(QMainWindow):
             game_store=self._game_store,
             parent=self,
         )
+        # Toast surfaces inside the main window after the dialog closes
+        # so the user sees the success-green slide-down behind / above
+        # the (already-dismissed) settings UI.
+        dialog.shortcut_created.connect(self.show_toast)
         if dialog.exec() == GameSettingsDialog.DialogCode.Accepted:
             cfg = self._game_store.get(product_id)
             if cfg is not None and cfg.exe_path is not None:
@@ -680,6 +702,15 @@ class MainWindow(QMainWindow):
         cfg: GameConfig,
     ) -> None:
         if not success:
+            # The progress dialog already showed the error to the user.
+            # In silent mode the main window was never visible, so once
+            # they dismiss the error there's nowhere to go — surface
+            # the window so they have a place to retry / inspect state.
+            if self._silent_mode and not self.isVisible():
+                self._silent_mode = False
+                self.show()
+                self.raise_()
+                self.activateWindow()
             return
         # Stamp last_used / last_played
         self._profile_store.update(
@@ -709,6 +740,105 @@ class MainWindow(QMainWindow):
             if not self._poll_timer.isActive():
                 self._poll_timer.start()
         self.refresh()
+        # Silent-mode success: game spawned cleanly with no UI required.
+        # Quit the launcher process — the game is detached (DETACHED_PROCESS)
+        # and survives our exit on its own.
+        if self._silent_mode and not self.isVisible():
+            self._silent_mode = False
+            app = QApplication.instance()
+            if app is not None:
+                app.quit()
+
+    # --- silent / external launch entry points ---
+
+    def begin_silent_launch(self, product_id: str) -> None:
+        """Start a launch flow as if from a desktop shortcut.
+
+        Triggered when the app was started with ``--launch=<id>`` and
+        no other instance was already running. The main window stays
+        hidden; only the progress dialog is visible while files verify
+        / download. On clean success ``_on_launch_finished`` calls
+        ``QApplication.quit()`` so the launcher exits and only the
+        game's own process remains.
+
+        Anything that needs user input — game not in the install
+        index, exe path missing, profile missing, token expired,
+        cnf file unreadable — surfaces the main window and hands off
+        to the normal click-handler path so the user resolves it
+        with the full UI in front of them.
+        """
+        self._silent_mode = True
+        # ``__init__`` already called ``refresh()``, but a stale
+        # ``dmmgame.cnf`` race (game just installed/uninstalled while
+        # the shortcut was clicked) is conceivable. Cheap to redo.
+        self.refresh()
+
+        if product_id not in self._installed_by_id:
+            self._reveal_silent_failure(
+                t("silent_launch.not_installed.title"),
+                t(
+                    "silent_launch.not_installed.body",
+                    product_id=product_id,
+                ),
+            )
+            return
+
+        if product_id in self._running:
+            # Spec: 게임이 이미 실행 중이면 아무것도 하지 않는다.
+            self._silent_mode = False
+            app = QApplication.instance()
+            if app is not None:
+                app.quit()
+            return
+
+        cfg = self._game_store.get(product_id)
+        bound = self._resolve_profile_for(product_id)
+        state = compute_state(cfg, bound, is_running=False)
+
+        if state in (CardState.NEEDS_SETUP, CardState.NEEDS_LOGIN):
+            # User input required — reveal the window and dispatch
+            # through the same path as a card click.
+            self._silent_mode = False
+            self.show()
+            self.raise_()
+            self.activateWindow()
+            self._on_status_clicked(product_id)
+            return
+
+        # READY — drive the launch worker. The progress dialog is its
+        # own top-level window; the hidden main window stays hidden.
+        self._launch_game(product_id)
+
+    def handle_external_launch(self, product_id: str) -> None:
+        """A second ``--launch`` invocation arrived over the IPC pipe.
+
+        We're already running with the user engaged, so this isn't
+        silent — show whatever the click flow would show. If the game
+        is already running we no-op (matches the silent-launch rule
+        and avoids spawning a duplicate).
+        """
+        self.refresh()
+        if product_id not in self._installed_by_id:
+            QMessageBox.warning(
+                self,
+                t("silent_launch.not_installed.title"),
+                t(
+                    "silent_launch.not_installed.body",
+                    product_id=product_id,
+                ),
+            )
+            return
+        if product_id in self._running:
+            return
+        self._on_status_clicked(product_id)
+
+    def _reveal_silent_failure(self, title: str, body: str) -> None:
+        """Surface the main window and warn the user, exiting silent mode."""
+        self._silent_mode = False
+        self.show()
+        self.raise_()
+        self.activateWindow()
+        QMessageBox.warning(self, title, body)
 
     # --- running-state polling ---
 
