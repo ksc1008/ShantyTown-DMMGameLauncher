@@ -10,14 +10,18 @@ DMM Game Player 대체 런처입니다. 게임마다 다른 DMM 계정(프로필
 - 프로필별 DMM 계정 분리 보관
 - `dmmgame.cnf` 파싱해서 설치된 게임 자동 표시
 - 비-일본 IP에서도 API 호출 가능
-- 외부 브라우저 로그인 + 클립보드 자동 인식
-- 토큰을 DPAPI로 암호화해서 저장 (Windows 한정)
+- 두 가지 로그인 방식
+  - 외부 브라우저 로그인 + 클립보드 자동 인식
+  - 앱 내 로그인 (웹뷰) — 브라우저 없이 앱 안에서 DMM 계정으로 바로 로그인
+- 자동 로그인 (웹뷰 방식): 저장된 계정으로 버튼 클릭 없이 로그인, 토큰 만료 시 자동으로 재로그인까지 처리
+- 토큰과 계정 정보(이메일 / 비밀번호)를 DPAPI로 암호화해서 저장 (Windows 한정)
+- 게임별 바탕화면 바로가기 생성 (바로가기로도 인증 · 실행 흐름을 그대로 거침)
 - 라이트 / 다크 / 시스템 테마, 한국어 / 영어 UI
-- 단일 exe 배포
+- 단일 exe 배포 (웹뷰 로그인은 보조 exe `__loginhelper.exe`가 함께 있을 때만 활성화)
 
 ## 실행법
 
-Release 탭에서 최신 버전의 `shantytown.exe`를 다운로드해서 실행하시면 됩니다.
+Release 탭에서 최신 버전을 다운로드해서 실행하시면 됩니다. 앱 내 로그인(웹뷰)을 쓰려면 `shantytown.exe`와 `__loginhelper.exe`를 같은 폴더에 함께 두세요. `shantytown.exe`만 있으면 브라우저 로그인만 사용할 수 있습니다.
 
 게임은 미리 공식 DMM Game Player로 설치되어 있어야 합니다. 이 앱은 이미 설치된 게임의 실행만 담당합니다.
 
@@ -37,7 +41,7 @@ Release 탭에서 최신 버전의 `shantytown.exe`를 다운로드해서 실행
 2. 사용할 DMM 계정별로 프로필을 생성합니다.
 3. PC에 설치된 게임은 자동으로 메인 화면에 표시됩니다.
 4. 게임 카드를 클릭하면 실행됩니다. 프로필을 바꾸면 같은 게임을 다른 DMM 계정으로 실행할 수 있습니다.
-5. 처음 그 프로필로 게임을 실행하거나 토큰이 만료되면 브라우저로 DMM 로그인을 진행합니다. (로그인 시 VPN이 필요할 수 있습니다.)
+5. 처음 그 프로필로 게임을 실행하거나 토큰이 만료되면 DMM 로그인을 진행합니다. 외부 브라우저 방식과 앱 내 로그인(웹뷰) 방식 중에서 프로필 관리 화면에서 고를 수 있습니다. 자동 로그인을 켜 두면 저장된 계정으로 알아서 로그인합니다. (로그인 시 VPN이 필요할 수 있습니다.)
 
 ---
 ## 개발 환경
@@ -63,11 +67,17 @@ uv run ruff check src/ tests/
 
 ```bash
 uv sync
-uv run python scripts/build_exe.py
-# → dist/shantytown.exe
+uv run python scripts/build_exe.py            # 둘 다 빌드 (main + helper)
+# 또는: .\build.ps1
+# → dist/shantytown.exe, dist/__loginhelper.exe
 ```
 
-`app_icon.svg`를 multi-resolution `.ico`로 변환한 뒤 PyInstaller `--onefile --windowed`로 빌드합니다. 결과물은 약 42 MB이고 자체 포함입니다.
+exe 두 개를 만듭니다.
+
+- `shantytown.exe` — 본체. `app_icon.svg`를 multi-resolution `.ico`로 변환한 뒤 PyInstaller `--onefile --windowed`로 빌드하며, QtWebEngine을 제외해 실행이 가볍습니다 (약 42 MB, 자체 포함).
+- `__loginhelper.exe` — 앱 내 로그인(웹뷰) 엔진. QtWebEngine을 포함한 콘솔 앱으로, 필요할 때만 본체가 실행합니다.
+
+`--target main` / `--target helper`로 한쪽만 빌드할 수도 있습니다. 둘을 같은 폴더에 함께 배포하세요. `shantytown.exe`만 배포하면 브라우저 로그인 전용이 됩니다.
 
 ## CLI 인자
 
@@ -76,6 +86,8 @@ uv run python scripts/build_exe.py
 | `--debug` | 에러 발생 시 응답 본문 등 자세한 정보를 표시합니다. telemetry hook도 함께 활성화됩니다. |
 | `--locale=ko` / `--locale=en` | UI 언어를 강제합니다. 미지정 시 시스템 로케일을 자동 감지합니다. |
 | `--show-tutorial` | 첫 실행 튜토리얼을 강제로 표시합니다. (저장된 플래그는 변경하지 않습니다.) |
+| `--show-webview` | 웹뷰 로그인 창을 화면에 띄웁니다. reCAPTCHA / 2단계 인증을 직접 처리해야 할 때 쓰는 디버그용 옵션입니다. |
+| `--launch=<product_id>` | 지정한 게임을 바로 실행합니다. 바탕화면 바로가기가 사용하는 옵션입니다. |
 
 나머지 인자는 Qt에 그대로 전달됩니다 (예: `-platform offscreen`).
 
@@ -84,13 +96,14 @@ uv run python scripts/build_exe.py
 ```
 src/shantytown/
   core/        # Qt 없는 순수 로직: API 클라이언트, MD5 검증, 다운로더,
-               #  DPAPI 래퍼, telemetry, 로케일 감지
+               #  DPAPI 래퍼, telemetry, 로케일 감지, 로그인 페이지 파싱
   store/       # JSON 영속 저장: 프로필 / 게임 설정 / 앱 설정 / known_games
-  gui/         # PyQt6 화면: 메인 윈도우, 카드, 다이얼로그(로그인/프로필/
-               #  게임설정/튜토리얼/진행), 워커, 테마
+  gui/         # PyQt6 화면: 메인 윈도우, 카드, 다이얼로그(브라우저·웹뷰 로그인/
+               #  프로필/게임설정/튜토리얼/진행), 워커, 테마
+  loginhelper.py  # 웹뷰 로그인 보조 프로세스(__loginhelper.exe)의 진입점
   resources/   # 번들 리소스: Fluent UI 아이콘, 튜토리얼 PNG, 앱 아이콘 SVG
-tests/         # 165개 테스트
-scripts/       # build_exe.py
+tests/         # 360여 개 테스트
+scripts/       # build_exe.py (main / helper 두 exe 빌드)
 docs/          # 초기 PowerShell 프로토타입 + 스프린트 계획
 ```
 

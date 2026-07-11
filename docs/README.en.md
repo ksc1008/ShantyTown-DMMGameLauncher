@@ -10,14 +10,18 @@ Already-installed DMM games can be launched from outside Japan without a VPN.
 - Per-profile DMM account isolation
 - Auto-detects installed games by parsing `dmmgame.cnf`
 - API calls work from non-Japan IPs
-- External-browser sign-in with automatic clipboard pickup
-- Tokens stored encrypted via DPAPI (Windows only)
+- Two sign-in methods
+  - External-browser sign-in with automatic clipboard pickup
+  - In-app sign-in (webview) — log in to DMM inside the app, no browser needed
+- Auto-login (webview method): sign in with saved credentials without a click, and re-authenticate automatically when the token expires
+- Tokens and account details (email / password) stored encrypted via DPAPI (Windows only)
+- Per-game desktop shortcuts (shortcuts still go through the full auth + launch flow)
 - Light / dark / system themes; Korean / English UI
-- Single-file exe distribution
+- Single-file exe distribution (webview sign-in only works when the `__loginhelper.exe` companion is present)
 
 ## How to use
 
-Download the latest `shantytown.exe` from the Releases tab and run it.
+Download the latest release from the Releases tab and run it. To use in-app sign-in (webview), keep `shantytown.exe` and `__loginhelper.exe` together in the same folder. With `shantytown.exe` alone, only browser sign-in is available.
 
 Games must be installed through the official DMM Game Player first. This app only handles launching already-installed games.
 
@@ -37,7 +41,7 @@ Same content as the in-app first-run guide.
 2. Create one profile per DMM account you'll use.
 3. Games installed on this PC appear on the main screen automatically.
 4. Click a game card to launch. Switching profiles plays the same game with a different DMM account.
-5. The first time you launch with a profile (or after the token expires), sign in to DMM through your browser. (A VPN may be needed during sign-in.)
+5. The first time you launch with a profile (or after the token expires), sign in to DMM. Choose the external-browser method or the in-app (webview) method in the profile manager; enable auto-login to sign in with saved credentials automatically. (A VPN may be needed during sign-in.)
 
 ---
 ## Development setup
@@ -63,11 +67,17 @@ uv run ruff check src/ tests/
 
 ```bash
 uv sync
-uv run python scripts/build_exe.py
-# → dist/shantytown.exe
+uv run python scripts/build_exe.py            # both exes (main + helper)
+# or: .\build.ps1
+# → dist/shantytown.exe, dist/__loginhelper.exe
 ```
 
-The build script renders `app_icon.svg` into a multi-resolution `.ico` and runs PyInstaller in `--onefile --windowed` mode. The resulting binary is around 42 MB and self-contained.
+The build produces two exes:
+
+- `shantytown.exe` — the app. Renders `app_icon.svg` into a multi-resolution `.ico` and runs PyInstaller in `--onefile --windowed` mode, with QtWebEngine excluded for a fast startup (around 42 MB, self-contained).
+- `__loginhelper.exe` — the in-app (webview) sign-in engine: a console app bundling QtWebEngine, spawned by the app only when needed.
+
+Use `--target main` / `--target helper` to build just one. Ship the two together in one folder; distributing `shantytown.exe` alone makes it browser-sign-in only.
 
 ## CLI flags
 
@@ -76,6 +86,8 @@ The build script renders `app_icon.svg` into a multi-resolution `.ico` and runs 
 | `--debug` | Show full error responses; enables the telemetry hook. |
 | `--locale=ko` / `--locale=en` | Force UI language. Defaults to system locale. |
 | `--show-tutorial` | Force the first-run walkthrough on this launch. (Does not flip the saved flag.) |
+| `--show-webview` | Show the webview sign-in window on screen. A debug aid for clearing reCAPTCHA / 2FA by hand. |
+| `--launch=<product_id>` | Launch the given game directly. Used by the desktop shortcuts. |
 
 Other flags are passed through to Qt (e.g. `-platform offscreen`).
 
@@ -84,14 +96,15 @@ Other flags are passed through to Qt (e.g. `-platform offscreen`).
 ```
 src/shantytown/
   core/        # Qt-free pure logic: API client, MD5 verify, downloader,
-               #  DPAPI wrapper, telemetry, locale detection
+               #  DPAPI wrapper, telemetry, locale detection, login-page parsing
   store/       # JSON-backed persistence: profiles / game configs / app
                #  settings / known_games
-  gui/         # PyQt6 surface: main window, cards, dialogs (login,
-               #  profile, game settings, tutorial, progress), workers, theme
+  gui/         # PyQt6 surface: main window, cards, dialogs (browser & webview
+               #  sign-in, profile, game settings, tutorial, progress), workers, theme
+  loginhelper.py  # Entry point for the webview sign-in helper process (__loginhelper.exe)
   resources/   # Bundled assets: Fluent UI icons, tutorial PNGs, app icon SVG
-tests/         # 165 tests
-scripts/       # build_exe.py
+tests/         # ~360 tests
+scripts/       # build_exe.py (builds the main / helper exes)
 docs/          # Original PowerShell prototype and sprint plans
 ```
 
