@@ -216,6 +216,61 @@ def test_token_encrypted_on_disk_when_dpapi_supported(store_path):
     assert s2.list()[0].token == "super-secret-token-12345"
 
 
+def test_password_round_trips(store_path):
+    """A saved webview-login password survives a store reload."""
+    s = ProfileStore(store_path)
+    p = s.create("alice", email="alice@example.com")
+    s.update(
+        Profile(
+            id=p.id,
+            name=p.name,
+            token=p.token,
+            created_at=p.created_at,
+            last_used_at=p.last_used_at,
+            email=p.email,
+            password="hunter2",
+        )
+    )
+    s2 = ProfileStore(store_path)
+    loaded = s2.get(p.id)
+    assert loaded is not None
+    assert loaded.password == "hunter2"
+    assert loaded.email == "alice@example.com"
+
+
+def test_password_defaults_to_none(store_path):
+    s = ProfileStore(store_path)
+    p = s.create("alice")
+    assert p.password is None
+    assert ProfileStore(store_path).get(p.id).password is None
+
+
+def test_password_encrypted_on_disk_when_dpapi_supported(store_path):
+    import sys
+
+    if sys.platform != "win32":
+        pytest.skip("DPAPI only on Windows")
+
+    s = ProfileStore(store_path)
+    p = s.create("alice")
+    s.update(
+        Profile(
+            id=p.id,
+            name=p.name,
+            token=None,
+            created_at=p.created_at,
+            last_used_at=p.last_used_at,
+            email=None,
+            password="super-secret-pw-12345",
+        )
+    )
+    raw = json.loads(store_path.read_text(encoding="utf-8"))
+    on_disk = raw["profiles"][0]["password"]
+    assert "super-secret-pw-12345" not in on_disk
+    assert on_disk.startswith("dpapi:v1:")
+    assert ProfileStore(store_path).get(p.id).password == "super-secret-pw-12345"
+
+
 def test_auto_migrates_legacy_plaintext_on_open(store_path):
     """A pre-DPAPI profiles.json with plaintext tokens gets re-saved
     in encrypted form the first time it's loaded, without requiring

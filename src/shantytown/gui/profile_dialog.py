@@ -23,6 +23,7 @@ Action surface:
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import datetime
 
 from PyQt6.QtCore import QModelIndex, QSize, Qt
@@ -46,9 +47,15 @@ from PyQt6.QtWidgets import (
 from shantytown.core.api import DmmApiClient
 from shantytown.core.i18n import t
 from shantytown.store.profiles import Profile, ProfileStore
+from shantytown.store.settings import LoginMethod, SettingsStore
+
+from .toggle_switch import ToggleSwitch
+from .webview_support import webview_available
 
 # Amber works on both light and dark themes — keep fixed for branding.
 _BADGE_NEEDS_LOGIN_HEX = "#f59e0b"
+# Blue for the email — a mid-tone that stays readable on light and dark.
+_EMAIL_HEX = "#4a90d9"
 
 # Shared geometry across all dialog buttons so colored and palette-default
 # buttons line up on the same baseline.
@@ -126,7 +133,10 @@ def format_profile_html(
         parts.append(f"<b>{t('profile.default_marker')}</b>")
     name_html = profile.name
     if profile.email:
-        name_html = f"{name_html} &lt;{profile.email}&gt;"
+        name_html = (
+            f"{name_html} "
+            f"<span style='color:{_EMAIL_HEX};'>&lt;{profile.email}&gt;</span>"
+        )
     parts.append(name_html)
     if needs_relogin(profile):
         parts.append(
@@ -194,10 +204,13 @@ class ProfileDialog(QDialog):
         store: ProfileStore,
         api: DmmApiClient,
         parent: QWidget | None = None,
+        *,
+        settings_store: SettingsStore | None = None,
     ) -> None:
         super().__init__(parent)
         self._store = store
         self._api = api
+        self._settings_store = settings_store
         self._build_ui()
         self._refresh()
 
@@ -210,6 +223,47 @@ class ProfileDialog(QDialog):
         toolbar = QHBoxLayout()
         toolbar.addWidget(QLabel(f"<b>{t('profile.heading')}</b>"))
         toolbar.addStretch(1)
+
+        # Webview-login on/off switch. Shown only when a settings store is
+        # wired in AND the webview login helper (__loginhelper) is actually
+        # available — a browser-only install (no helper) hides it. Sits to
+        # the left of the Add button (on = webview, off = browser).
+        self._login_method_row = QWidget()
+        method_layout = QHBoxLayout(self._login_method_row)
+        method_layout.setContentsMargins(0, 0, 8, 0)
+        method_layout.setSpacing(6)
+
+        # Auto-login on/off — sits to the LEFT of the webview switch and is
+        # only meaningful (and only shown) while webview login is on. When
+        # on: saved-credential logins submit without a click, and expired
+        # tokens auto re-authenticate (see main_window).
+        self._auto_login_widget = QWidget()
+        auto_layout = QHBoxLayout(self._auto_login_widget)
+        auto_layout.setContentsMargins(0, 0, 8, 0)
+        auto_layout.setSpacing(6)
+        auto_label = QLabel(t("profile.auto_login_label"))
+        self._auto_login_switch = ToggleSwitch()
+        self._auto_login_switch.setToolTip(t("profile.auto_login.tooltip"))
+        self._auto_login_switch.setChecked(self._current_auto_login())
+        self._auto_login_switch.toggled.connect(self._on_auto_login_toggled)
+        auto_layout.addWidget(auto_label)
+        auto_layout.addWidget(self._auto_login_switch)
+        method_layout.addWidget(self._auto_login_widget)
+
+        method_label = QLabel(t("profile.webview_toggle_label"))
+        self._login_method_switch = ToggleSwitch()
+        self._login_method_switch.setToolTip(t("profile.webview_toggle.tooltip"))
+        webview_on = self._current_login_method() == "webview"
+        self._login_method_switch.setChecked(webview_on)
+        self._login_method_switch.toggled.connect(self._on_login_method_toggled)
+        method_layout.addWidget(method_label)
+        method_layout.addWidget(self._login_method_switch)
+        # Auto-login is a sub-option of webview login → hidden unless on.
+        self._auto_login_widget.setVisible(webview_on)
+        self._login_method_row.setVisible(
+            self._settings_store is not None and webview_available()
+        )
+        toolbar.addWidget(self._login_method_row)
 
         self._add_btn = QPushButton(t("profile.add_button"))
         self._add_btn.setStyleSheet(_PRIMARY_BUTTON)
@@ -300,6 +354,33 @@ class ProfileDialog(QDialog):
         pid = item.data(Qt.ItemDataRole.UserRole)
         return self._store.get(str(pid))
 
+    # --- login method toggle ---
+
+    def _current_login_method(self) -> LoginMethod:
+        if self._settings_store is None:
+            return "browser"
+        return self._settings_store.get().login_method
+
+    def _on_login_method_toggled(self, checked: bool) -> None:
+        if self._settings_store is None:
+            return
+        next_method: LoginMethod = "webview" if checked else "browser"
+        current = self._settings_store.get()
+        self._settings_store.update(replace(current, login_method=next_method))
+        # Auto-login only applies to webview; reveal/hide it with the switch.
+        self._auto_login_widget.setVisible(checked)
+
+    def _current_auto_login(self) -> bool:
+        if self._settings_store is None:
+            return False
+        return self._settings_store.get().auto_login
+
+    def _on_auto_login_toggled(self, checked: bool) -> None:
+        if self._settings_store is None:
+            return
+        current = self._settings_store.get()
+        self._settings_store.update(replace(current, auto_login=checked))
+
     # --- actions ---
 
     def _add_profile(self) -> None:
@@ -327,6 +408,7 @@ class ProfileDialog(QDialog):
             created_at=profile.created_at,
             last_used_at=profile.last_used_at,
             email=profile.email,
+            password=profile.password,
         )
         self._store.update(renamed)
         self._refresh()
@@ -382,6 +464,7 @@ class ProfileDialog(QDialog):
                 created_at=profile.created_at,
                 last_used_at=profile.last_used_at,
                 email=profile.email,
+                password=profile.password,
             )
         )
         self._refresh()

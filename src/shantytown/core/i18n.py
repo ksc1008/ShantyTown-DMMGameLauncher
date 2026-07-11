@@ -38,6 +38,7 @@ _STRINGS_KO: Final[dict[str, str]] = {
     "main.cannot_launch.title": "실행 불가",
     "main.cannot_launch.body": "게임 설정이 완료되지 않았습니다.",
     "main.progress_dialog.title": "게임 실행",
+    "main.logout_done": "'{name}' 프로필에서 로그아웃했습니다. 다시 실행하여 로그인해 주세요.",
     "main.exe_detected.title": "실행 파일 자동 감지",
     "main.exe_detected.body": "<b>{name}</b> 파일을 발견했습니다. 이 파일을 사용할까요?",
     "main.choose_exe.title": "실행 파일 선택",
@@ -108,11 +109,51 @@ _STRINGS_KO: Final[dict[str, str]] = {
     "login.failed": "계정 설정 실패: {error}",
     "login.completed.title": "계정 설정 완료",
     "login.completed.body": "'{name}' 프로필의 계정이 연결됐습니다.",
+    # --- webview login form (credential-based) ---
+    "weblogin.title": "DMM 계정 로그인",
+    "weblogin.heading": "계정 정보로 로그인",
+    "weblogin.email_label": "이메일",
+    "weblogin.password_label": "비밀번호",
+    "weblogin.email_placeholder": "email@example.com",
+    "weblogin.password_placeholder": "비밀번호",
+    "weblogin.edit_button": "수정",
+    "weblogin.done_button": "완료",
+    "weblogin.login_button": "로그인",
+    "weblogin.cancel_button": "취소",
+    "weblogin.empty.title": "입력 필요",
+    "weblogin.empty.body": "이메일과 비밀번호를 모두 입력해주세요.",
+    "weblogin.reveal_password": "비밀번호 표시/숨김",
+    "weblogin.loading_engine": "웹뷰 로드중…",
+    "weblogin.progress": "로그인 중… 잠시만 기다려주세요.",
+    "weblogin.helper_missing": "웹뷰 로그인 도우미(__loginhelper)를 찾을 수 없습니다.",
+    "weblogin.failed_title": "로그인 실패",
+    "weblogin.site_message_prefix": "[Message]",
+    "weblogin.err.helper_exited": "로그인 도우미가 예기치 않게 종료되었습니다.",
+    "weblogin.err.helper_error": "로그인 도우미 프로세스에서 오류가 발생했습니다.",
+    "weblogin.err.timeout": (
+        "로그인 응답을 기다리다 시간이 초과되었습니다. "
+        "reCAPTCHA 인증이나 2단계 인증이 필요한 상태일 수 있습니다."
+    ),
+    "weblogin.err.page_load_failed": (
+        "로그인 페이지를 불러오지 못했습니다. 네트워크 상태를 확인해주세요."
+    ),
+    "weblogin.err.form_not_found": (
+        "로그인 페이지에서 입력 양식을 찾지 못했습니다. (페이지 구조가 변경되었을 수 있음)"
+    ),
+    "weblogin.err.redirect_without_code": "로그인 응답에서 인증 코드를 찾지 못했습니다.",
+    "webview_login.failed": "웹뷰 로그인 실패: {reason}",
     # --- profile dialog ---
     "profile.title": "프로필 관리",
     "profile.heading": "DMM 계정 프로필",
     "profile.add_button": "+ 추가",
     "profile.delete_button": "삭제",
+    "profile.webview_toggle_label": "웹뷰 로그인",
+    "profile.webview_toggle.tooltip": "웹뷰 로그인 방식을 켜거나 끕니다 (끄면 브라우저 방식)",
+    "profile.auto_login_label": "자동 로그인",
+    "profile.auto_login.tooltip": (
+        "저장된 계정으로 자동 로그인합니다. 로그인 창이 뜨면 버튼을 누르지 않아도 "
+        "바로 로그인하고, 토큰 만료로 재로그인이 필요하면 자동으로 처리합니다."
+    ),
     "profile.rename_button": "이름 변경",
     "profile.default_button": "기본으로 설정",
     "profile.logout_button": "로그아웃",
@@ -168,6 +209,7 @@ _STRINGS_KO: Final[dict[str, str]] = {
     "progress.preparing": "준비 중…",
     "progress.failed": "실패: {message}",
     "progress.cancel_requested": "취소 요청됨…",
+    "progress.logout_button": "로그아웃",
     # --- worker error / progress messages ---
     "worker.error.api": "DMM API 오류: {error}",
     "worker.error.not_linked": (
@@ -179,7 +221,7 @@ _STRINGS_KO: Final[dict[str, str]] = {
     "worker.error.auth_invalid": (
         "DMM 인증 정보가 만료되었거나 유효하지 않습니다.\n"
         "\n"
-        "프로필 관리에서 해당 프로필을 로그아웃한 뒤 다시 로그인해 주세요."
+        "아래 로그아웃 버튼을 누른 뒤 다시 실행하여 로그인해 주세요."
     ),
     "worker.error.file_not_found": "파일을 찾을 수 없습니다: {error}",
     "worker.error.unexpected": "예상치 못한 오류: {error}",
@@ -212,6 +254,9 @@ _STRINGS_EN: Final[dict[str, str]] = {
     "main.cannot_launch.title": "Cannot launch",
     "main.cannot_launch.body": "Game setup is incomplete.",
     "main.progress_dialog.title": "Launching",
+    "main.logout_done": (
+        "Signed out of '{name}'. Launch again to sign in."
+    ),
     "main.exe_detected.title": "Auto-detected executable",
     "main.exe_detected.body": "Found <b>{name}</b>. Use this file?",
     "main.choose_exe.title": "Choose executable",
@@ -286,10 +331,51 @@ _STRINGS_EN: Final[dict[str, str]] = {
     "login.failed": "Sign-in failed: {error}",
     "login.completed.title": "Sign-in complete",
     "login.completed.body": "Profile '{name}' is now linked to a DMM account.",
+    "weblogin.title": "Sign in to DMM",
+    "weblogin.heading": "Sign in with your credentials",
+    "weblogin.email_label": "Email",
+    "weblogin.password_label": "Password",
+    "weblogin.email_placeholder": "email@example.com",
+    "weblogin.password_placeholder": "Password",
+    "weblogin.edit_button": "Edit",
+    "weblogin.done_button": "Done",
+    "weblogin.login_button": "Sign in",
+    "weblogin.cancel_button": "Cancel",
+    "weblogin.empty.title": "Input required",
+    "weblogin.empty.body": "Enter both your email and password.",
+    "weblogin.reveal_password": "Show/hide password",
+    "weblogin.loading_engine": "Loading webview…",
+    "weblogin.progress": "Signing in… please wait.",
+    "weblogin.helper_missing": "The webview login helper (__loginhelper) was not found.",
+    "weblogin.failed_title": "Login failed",
+    "weblogin.site_message_prefix": "[Message]",
+    "weblogin.err.helper_exited": "The login helper exited unexpectedly.",
+    "weblogin.err.helper_error": "The login helper process reported an error.",
+    "weblogin.err.timeout": (
+        "Timed out waiting for the login to finish. The account may be "
+        "facing a reCAPTCHA challenge or two-step verification."
+    ),
+    "weblogin.err.page_load_failed": (
+        "Failed to load the login page. Check your network connection."
+    ),
+    "weblogin.err.form_not_found": (
+        "Could not find the login form on the page (its layout may have changed)."
+    ),
+    "weblogin.err.redirect_without_code": (
+        "The login response did not contain an authorization code."
+    ),
+    "webview_login.failed": "WebView login failed: {reason}",
     "profile.title": "Profile manager",
     "profile.heading": "DMM account profiles",
     "profile.add_button": "+ Add",
     "profile.delete_button": "Delete",
+    "profile.webview_toggle_label": "WebView login",
+    "profile.webview_toggle.tooltip": "Turn the webview login method on/off (off = browser)",
+    "profile.auto_login_label": "Auto login",
+    "profile.auto_login.tooltip": (
+        "Sign in automatically with saved credentials: the login form submits "
+        "without a click, and an expired token re-authenticates on its own."
+    ),
     "profile.rename_button": "Rename",
     "profile.default_button": "Set as default",
     "profile.logout_button": "Sign out",
@@ -342,6 +428,7 @@ _STRINGS_EN: Final[dict[str, str]] = {
     "progress.preparing": "Preparing…",
     "progress.failed": "Failed: {message}",
     "progress.cancel_requested": "Cancelling…",
+    "progress.logout_button": "Sign out",
     "worker.error.api": "DMM API error: {error}",
     "worker.error.not_linked": (
         "This DMM account hasn't been linked to that game yet.\n"
@@ -352,7 +439,7 @@ _STRINGS_EN: Final[dict[str, str]] = {
     "worker.error.auth_invalid": (
         "Your DMM credentials are expired or invalid.\n"
         "\n"
-        "Sign out of this profile from the profile manager and sign in again."
+        "Click Sign out below, then launch again to sign in."
     ),
     "worker.error.file_not_found": "File not found: {error}",
     "worker.error.unexpected": "Unexpected error: {error}",

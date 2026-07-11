@@ -19,6 +19,7 @@ from shantytown.gui.profile_dialog import (
     needs_relogin,
 )
 from shantytown.store.profiles import Profile, ProfileStore
+from shantytown.store.settings import SettingsStore
 
 
 def _make(token: str | None, name: str = "alice", email: str | None = None) -> Profile:
@@ -81,6 +82,14 @@ def test_format_includes_email_when_present():
     assert "a@b.c" in html
 
 
+def test_format_email_is_blue():
+    html = format_profile_html(
+        _make("tok", name="alice", email="a@b.c"), is_default=False
+    )
+    assert "a@b.c" in html
+    assert "#4a90d9" in html  # blue-toned email
+
+
 def test_format_includes_last_used_section():
     html = format_profile_html(_make("tok"), is_default=False)
     assert "마지막 사용" in html
@@ -120,6 +129,156 @@ def test_logout_clears_token(qtbot, store_with_profile, monkeypatch):
     # Email and identity preserved
     assert refreshed.email == "a@b.c"
     assert refreshed.name == "alice"
+
+
+# --- login-method toggle ---
+
+
+def test_login_method_switch_hidden_without_settings_store(qtbot, tmp_path):
+    store = ProfileStore(tmp_path / "profiles.json")
+    api = MagicMock(spec=DmmApiClient)
+    dialog = ProfileDialog(store, api)
+    qtbot.addWidget(dialog)
+    assert dialog._login_method_row.isHidden()
+
+
+def test_login_method_switch_visible_with_helper_and_settings(qtbot, tmp_path):
+    # Helper is available in dev → toggle shown (no --debug needed).
+    store = ProfileStore(tmp_path / "profiles.json")
+    settings = SettingsStore(tmp_path / "settings.json")
+    api = MagicMock(spec=DmmApiClient)
+    dialog = ProfileDialog(store, api, settings_store=settings)
+    qtbot.addWidget(dialog)
+    dialog.show()
+    assert dialog._login_method_row.isVisible()
+
+
+def test_login_method_switch_hidden_when_webview_unavailable(
+    qtbot, tmp_path, monkeypatch
+):
+    """Browser-only build: no QtWebEngine → toggle hidden even in debug."""
+    import shantytown.gui.profile_dialog as pd
+
+    monkeypatch.setenv("SHANTYTOWN_DEBUG", "1")
+    monkeypatch.setattr(pd, "webview_available", lambda: False)
+    store = ProfileStore(tmp_path / "profiles.json")
+    settings = SettingsStore(tmp_path / "settings.json")
+    api = MagicMock(spec=DmmApiClient)
+    dialog = ProfileDialog(store, api, settings_store=settings)
+    qtbot.addWidget(dialog)
+    assert dialog._login_method_row.isHidden()
+
+
+def test_login_method_switch_reflects_persisted_method(qtbot, tmp_path, monkeypatch):
+    from shantytown.store.settings import Settings
+
+    monkeypatch.setenv("SHANTYTOWN_DEBUG", "1")
+    store = ProfileStore(tmp_path / "profiles.json")
+    settings = SettingsStore(tmp_path / "settings.json")
+    settings.update(Settings(login_method="webview"))
+    api = MagicMock(spec=DmmApiClient)
+    dialog = ProfileDialog(store, api, settings_store=settings)
+    qtbot.addWidget(dialog)
+    assert dialog._login_method_switch.isChecked() is True
+
+
+def test_login_method_switch_flips_and_persists(qtbot, tmp_path, monkeypatch):
+    monkeypatch.setenv("SHANTYTOWN_DEBUG", "1")
+    store = ProfileStore(tmp_path / "profiles.json")
+    settings_path = tmp_path / "settings.json"
+    settings = SettingsStore(settings_path)
+    api = MagicMock(spec=DmmApiClient)
+    dialog = ProfileDialog(store, api, settings_store=settings)
+    qtbot.addWidget(dialog)
+
+    # Default is browser (switch off).
+    assert settings.get().login_method == "browser"
+    assert dialog._login_method_switch.isChecked() is False
+
+    dialog._login_method_switch.setChecked(True)  # emits toggled(True)
+    assert settings.get().login_method == "webview"
+    assert SettingsStore(settings_path).get().login_method == "webview"
+
+    dialog._login_method_switch.setChecked(False)
+    assert settings.get().login_method == "browser"
+
+
+def test_login_method_switch_preserves_theme(qtbot, tmp_path, monkeypatch):
+    """Flipping the login method must not clobber other settings fields."""
+    from shantytown.store.settings import Settings
+
+    monkeypatch.setenv("SHANTYTOWN_DEBUG", "1")
+    store = ProfileStore(tmp_path / "profiles.json")
+    settings = SettingsStore(tmp_path / "settings.json")
+    settings.update(Settings(theme="dark", tutorial_completed=True))
+    api = MagicMock(spec=DmmApiClient)
+    dialog = ProfileDialog(store, api, settings_store=settings)
+    qtbot.addWidget(dialog)
+
+    dialog._login_method_switch.setChecked(True)
+    loaded = settings.get()
+    assert loaded.login_method == "webview"
+    assert loaded.theme == "dark"
+    assert loaded.tutorial_completed is True
+
+
+# --- auto-login sub-toggle (shown only under webview login) ---
+
+
+def test_auto_login_hidden_when_webview_off(qtbot, tmp_path):
+    store = ProfileStore(tmp_path / "profiles.json")
+    settings = SettingsStore(tmp_path / "settings.json")  # browser default
+    api = MagicMock(spec=DmmApiClient)
+    dialog = ProfileDialog(store, api, settings_store=settings)
+    qtbot.addWidget(dialog)
+    dialog.show()
+    assert dialog._auto_login_widget.isVisible() is False
+
+
+def test_auto_login_shown_when_webview_on(qtbot, tmp_path):
+    from shantytown.store.settings import Settings
+
+    store = ProfileStore(tmp_path / "profiles.json")
+    settings = SettingsStore(tmp_path / "settings.json")
+    settings.update(Settings(login_method="webview"))
+    api = MagicMock(spec=DmmApiClient)
+    dialog = ProfileDialog(store, api, settings_store=settings)
+    qtbot.addWidget(dialog)
+    dialog.show()
+    assert dialog._auto_login_widget.isVisible() is True
+
+
+def test_toggling_webview_reveals_and_hides_auto_login(qtbot, tmp_path):
+    store = ProfileStore(tmp_path / "profiles.json")
+    settings = SettingsStore(tmp_path / "settings.json")
+    api = MagicMock(spec=DmmApiClient)
+    dialog = ProfileDialog(store, api, settings_store=settings)
+    qtbot.addWidget(dialog)
+    dialog.show()
+    assert dialog._auto_login_widget.isVisible() is False
+    dialog._login_method_switch.setChecked(True)  # webview on
+    assert dialog._auto_login_widget.isVisible() is True
+    dialog._login_method_switch.setChecked(False)  # webview off
+    assert dialog._auto_login_widget.isVisible() is False
+
+
+def test_auto_login_switch_flips_and_persists(qtbot, tmp_path):
+    from shantytown.store.settings import Settings
+
+    store = ProfileStore(tmp_path / "profiles.json")
+    settings_path = tmp_path / "settings.json"
+    settings = SettingsStore(settings_path)
+    settings.update(Settings(login_method="webview"))
+    api = MagicMock(spec=DmmApiClient)
+    dialog = ProfileDialog(store, api, settings_store=settings)
+    qtbot.addWidget(dialog)
+
+    assert dialog._auto_login_switch.isChecked() is False
+    dialog._auto_login_switch.setChecked(True)
+    assert settings.get().auto_login is True
+    assert SettingsStore(settings_path).get().auto_login is True
+    # Other fields preserved.
+    assert settings.get().login_method == "webview"
 
 
 def test_logout_noop_when_already_logged_out(qtbot, tmp_path, monkeypatch):

@@ -25,20 +25,24 @@ from __future__ import annotations
 import argparse
 import os
 import sys
+from dataclasses import replace
 
 
 def _parse_args(
     argv: list[str],
-) -> tuple[bool, str | None, bool, str | None, list[str]]:
+) -> tuple[bool, str | None, bool, str | None, bool, list[str]]:
     """Pull our flags out of ``argv`` so QApplication never sees them.
 
-    Returns ``(debug, locale, show_tutorial, launch_id, qt_argv)``.
-    We use ``parse_known_args`` so Qt's own command-line flags (e.g.
-    ``-platform offscreen`` for tests) pass through untouched.
+    Returns ``(debug, locale, show_tutorial, launch_id, show_webview,
+    qt_argv)``. We use ``parse_known_args`` so Qt's own command-line
+    flags (e.g. ``-platform offscreen`` for tests) pass through untouched.
     """
     parser = argparse.ArgumentParser(prog="shantytown", add_help=False)
     parser.add_argument("--debug", action="store_true")
     parser.add_argument("--locale", type=str, default=None)
+    # Reveals the login webview (normally headless) so a developer can
+    # watch the automated login and clear an interactive challenge by hand.
+    parser.add_argument("--show-webview", action="store_true")
     # Forces the first-run tutorial to show on this launch regardless
     # of the saved ``tutorial_completed`` flag. Useful for re-watching
     # or for QA. The setting is *not* persisted — it's a per-run
@@ -57,16 +61,61 @@ def _parse_args(
         args.locale,
         args.show_tutorial,
         launch_id,
+        args.show_webview,
         [argv[0], *rest],
     )
+
+
+def _ensure_std_streams(debug: bool) -> None:
+    """Make ``sys.stdout``/``sys.stderr`` safe to write to.
+
+    A PyInstaller ``--windowed`` build has no console, so both streams are
+    ``None`` and *any* write (``print(..., file=sys.stderr)``, a library
+    logging to stderr, …) raises ``AttributeError`` and crashes startup.
+    Point the missing streams at a target: a ``debug.log`` file under the
+    app-data logs dir when ``--debug`` (so diagnostics survive), otherwise
+    the null device. No-op in a normal console/dev run where the streams
+    already exist.
+    """
+    if sys.stdout is not None and sys.stderr is not None:
+        return
+    sink = None
+    if debug:
+        try:
+            from shantytown.store.paths import get_logs_dir
+
+            # Kept open for the process lifetime (like the real streams).
+            sink = open(
+                get_logs_dir() / "debug.log",
+                "a",
+                encoding="utf-8",
+                buffering=1,
+            )
+        except OSError:
+            sink = None
+    if sink is None:
+        sink = open(os.devnull, "w", encoding="utf-8")
+    if sys.stdout is None:
+        sys.stdout = sink
+    if sys.stderr is None:
+        sys.stderr = sink
 
 
 def main(argv: list[str] | None = None) -> int:
     """Boot the 판자촌 GUI."""
     raw_argv = list(argv if argv is not None else sys.argv)
-    debug, locale_override, force_tutorial, launch_id, qt_argv = _parse_args(
-        raw_argv
-    )
+    (
+        debug,
+        locale_override,
+        force_tutorial,
+        launch_id,
+        show_webview,
+        qt_argv,
+    ) = _parse_args(raw_argv)
+
+    # Do this first: in a windowed build the std streams are None and any
+    # later write would crash before we ever reach the UI.
+    _ensure_std_streams(debug)
 
     # Initialise i18n before any string-using code runs. This way both
     # the debug warning below and every QApplication child string sees
@@ -74,6 +123,9 @@ def main(argv: list[str] | None = None) -> int:
     from shantytown.core.i18n import init_translator
 
     init_translator(locale_override)
+
+    if show_webview:
+        os.environ["SHANTYTOWN_SHOW_WEBVIEW"] = "1"
 
     if debug:
         os.environ["SHANTYTOWN_DEBUG"] = "1"
@@ -84,7 +136,7 @@ def main(argv: list[str] | None = None) -> int:
                 "set SHANTYTOWN_TELEMETRY_ENDPOINT to actually send data.\n"
             )
 
-    from PyQt6.QtCore import QTimer
+    from PyQt6.QtCore import Qt, QTimer
     from PyQt6.QtNetwork import QLocalServer, QLocalSocket
     from PyQt6.QtWidgets import QApplication
 
@@ -100,7 +152,12 @@ def main(argv: list[str] | None = None) -> int:
         get_settings_path,
     )
     from shantytown.store.profiles import ProfileStore
-    from shantytown.store.settings import Settings, SettingsStore
+    from shantytown.store.settings import SettingsStore
+
+    # QtWebEngine (used by the webview login agent) requires OpenGL context
+    # sharing to be enabled before the QApplication is constructed. Setting
+    # it unconditionally is cheap and harmless when WebEngine isn't used.
+    QApplication.setAttribute(Qt.ApplicationAttribute.AA_ShareOpenGLContexts)
 
     app = QApplication(qt_argv)
     app.setApplicationName(t("app.name"))
@@ -255,9 +312,9 @@ def main(argv: list[str] | None = None) -> int:
         if force_tutorial or not saved.tutorial_completed:
             TutorialDialog(parent=window).exec()
             if not force_tutorial:
-                settings_store.update(
-                    Settings(theme=saved.theme, tutorial_completed=True)
-                )
+                # Preserve other settings fields (e.g. login_method) — only
+                # tutorial_completed changes here.
+                settings_store.update(replace(saved, tutorial_completed=True))
 
     if launch_id is not None:
         QTimer.singleShot(0, lambda: window.begin_silent_launch(launch_id))

@@ -26,11 +26,12 @@ from "실행 중" back to "실행".
 from __future__ import annotations
 
 import subprocess
-from dataclasses import dataclass
+import sys
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 from PyQt6.QtCore import QSize, Qt, QThread, QTimer
-from PyQt6.QtGui import QIcon, QPalette, QResizeEvent, QShowEvent
+from PyQt6.QtGui import QCloseEvent, QIcon, QPalette, QResizeEvent, QShowEvent
 from PyQt6.QtWidgets import (
     QApplication,
     QFileDialog,
@@ -46,7 +47,7 @@ from PyQt6.QtWidgets import (
 )
 
 from shantytown.core import telemetry
-from shantytown.core.api import DmmApiClient
+from shantytown.core.api import DmmApiClient, DmmApiError
 from shantytown.core.dmmcfg import get_default_cnf_path, parse_dmmgame_cnf
 from shantytown.core.exe_finder import find_exe_candidate
 from shantytown.core.i18n import t
@@ -55,7 +56,7 @@ from shantytown.core.process_finder import find_running_pids, is_pid_alive
 from shantytown.store.games import GameConfig, GameStore
 from shantytown.store.known_games import KnownGame, load_known_games
 from shantytown.store.profiles import Profile, ProfileStore
-from shantytown.store.settings import Settings, SettingsStore, ThemeMode
+from shantytown.store.settings import SettingsStore, ThemeMode
 
 from .fluent import current_tokens
 from .game_card import CardState, GameCard, compute_state
@@ -67,6 +68,9 @@ from .progress_dialog import ProgressDialog
 from .theme import apply_theme
 from .toast import Toast
 from .tutorial_dialog import TutorialDialog
+from .web_login_dialog import WebLoginDialog
+from .webview_login_client import WebviewLoginClient
+from .webview_support import webview_available
 from .workers import LaunchWorker, utc_now
 
 RUNNING_POLL_INTERVAL_MS = 2000
@@ -125,6 +129,31 @@ _THEME_TOOLTIP_KEYS: dict[ThemeMode, str] = {
     "dark": "main.theme.tooltip.dark",
 }
 
+# Stable failure codes from WebviewLoginClient / the login agent → i18n
+# keys. Anything unmapped (e.g. DMM's own server-side error message) is
+# shown verbatim.
+_WEBVIEW_FAILURE_KEYS: dict[str, str] = {
+    "helper_missing": "weblogin.helper_missing",
+    "helper_exited": "weblogin.err.helper_exited",
+    "helper_error": "weblogin.err.helper_error",
+    "timeout": "weblogin.err.timeout",
+    "page_load_failed": "weblogin.err.page_load_failed",
+    "redirect_without_code": "weblogin.err.redirect_without_code",
+}
+
+
+def _webview_failure_text(reason: str) -> str | None:
+    """Localised explanation for a known failure code, else ``None``.
+
+    ``None`` means ``reason`` is a raw, verbatim message from DMM (not one
+    of our codes); the caller surfaces it as a copyable site message rather
+    than as our own explanation.
+    """
+    key = _WEBVIEW_FAILURE_KEYS.get(reason)
+    if key is None and reason.startswith("form_not_found"):
+        key = "weblogin.err.form_not_found"
+    return t(key) if key else None
+
 
 class MainWindow(QMainWindow):
     def __init__(
@@ -144,6 +173,18 @@ class MainWindow(QMainWindow):
         self._known_games: dict[str, KnownGame] = load_known_games()
         self._installed_by_id: dict[str, InstalledGame] = {}
         self._running: dict[str, _RunningGame] = {}
+        # The webview login client wraps a warm __loginhelper process,
+        # reused across login attempts (spawning Chromium per attempt is
+        # too slow). Shut down after a successful game launch / app exit.
+        self._webview_client: WebviewLoginClient | None = None
+        # (profile_id, product_id) of the login attempt in flight.
+        self._webview_login_ctx: tuple[str, str] | None = None
+        self._web_dialog: WebLoginDialog | None = None
+        # Auto-login (expired-token path): product whose launch just failed
+        # with an auth error and is scheduled for an automatic logout+retry,
+        # plus the set already retried once so a repeat failure can't loop.
+        self._auto_relogin_pending: str | None = None
+        self._auto_relogin_attempted: set[str] = set()
 
         self._poll_timer = QTimer(self)
         self._poll_timer.setInterval(RUNNING_POLL_INTERVAL_MS)
@@ -341,6 +382,11 @@ class MainWindow(QMainWindow):
         # first paint instead of waiting for the user to resize.
         QTimer.singleShot(0, self._initial_reflow)
 
+    def closeEvent(self, event: QCloseEvent | None) -> None:
+        # The warm __loginhelper (if any) must not outlive the app.
+        self._shutdown_webview_helper()
+        super().closeEvent(event)
+
     def _initial_reflow(self) -> None:
         new_cols = self._compute_columns()
         if new_cols != self._current_cols:
@@ -420,7 +466,12 @@ class MainWindow(QMainWindow):
             return
         apply_theme(app, next_mode)
         if self._settings_store is not None:
-            self._settings_store.update(Settings(theme=next_mode))
+            # Preserve the other settings fields (tutorial_completed,
+            # login_method) — only the theme is changing here.
+            current_settings = self._settings_store.get()
+            self._settings_store.update(
+                replace(current_settings, theme=next_mode)
+            )
         # Per-widget stylesheets cache resolved palette colors at parse
         # time. Re-applying the same QSS string after the palette swap
         # forces Qt to re-evaluate ``palette(...)`` refs against the
@@ -543,15 +594,12 @@ class MainWindow(QMainWindow):
 
     def _save_exe(self, installed: InstalledGame, exe_path: Path) -> None:
         existing = self._game_store.get(installed.product_id)
-        cfg = GameConfig(
-            product_id=installed.product_id,
-            exe_path=exe_path,
-            profile_id=existing.profile_id if existing is not None else None,
-            favorite=existing.favorite if existing is not None else False,
-            last_played_at=(
-                existing.last_played_at if existing is not None else None
-            ),
-        )
+        # Preserve every other field (esp. the user's display_name override)
+        # when only the exe path changes.
+        if existing is not None:
+            cfg = replace(existing, exe_path=exe_path)
+        else:
+            cfg = GameConfig(product_id=installed.product_id, exe_path=exe_path)
         self._game_store.upsert(cfg)
         # Best-effort telemetry ping; no-op unless the test flag is set.
         telemetry.report_exe_path(
@@ -592,25 +640,78 @@ class MainWindow(QMainWindow):
                 GameConfig(product_id=product_id, profile_id=normalized)
             )
         else:
-            self._game_store.upsert(
-                GameConfig(
-                    product_id=existing.product_id,
-                    exe_path=existing.exe_path,
-                    profile_id=normalized,
-                    favorite=existing.favorite,
-                    last_played_at=existing.last_played_at,
-                )
-            )
+            # replace() keeps display_name and every other field intact.
+            self._game_store.upsert(replace(existing, profile_id=normalized))
         self.refresh()
 
     def _open_profiles(self) -> None:
-        dialog = ProfileDialog(self._profile_store, self._api, parent=self)
+        dialog = ProfileDialog(
+            self._profile_store,
+            self._api,
+            parent=self,
+            settings_store=self._settings_store,
+        )
         dialog.exec()
         self.refresh()
 
     # --- launch flow ---
 
+    def _effective_login_method(self) -> str:
+        """The login method actually used.
+
+        Webview is honoured only when the ``__loginhelper`` is actually
+        available (``webview_available()``). Otherwise the browser flow is
+        forced regardless of the saved ``login_method`` — so a browser-only
+        install (no helper shipped) never reaches the webview path. Helper
+        presence *is* the gate; no ``--debug`` flag is needed.
+        """
+        if not webview_available() or self._settings_store is None:
+            return "browser"
+        return self._settings_store.get().login_method
+
+    def _auto_login_active(self) -> bool:
+        """Whether auto-login behaviours apply right now.
+
+        Gated on the webview method being effective *and* the auto-login
+        setting being on — the toggle is only offered under webview, so
+        auto-login never drives the browser flow.
+        """
+        if self._settings_store is None:
+            return False
+        if self._effective_login_method() != "webview":
+            return False
+        return self._settings_store.get().auto_login
+
     def _login_then_launch(self, profile: Profile, product_id: str) -> None:
+        method = self._effective_login_method()
+        if method == "webview":
+            # Webview mode: collect/confirm credentials in the form, then
+            # drive the headless login agent to mint a token. The dialog
+            # stays open as a progress view and is closed on success or
+            # shown an error on failure (see the agent callbacks). With
+            # auto-login on, a profile with saved credentials submits
+            # automatically — no button click needed.
+            web_dialog = WebLoginDialog(
+                profile,
+                self._profile_store,
+                parent=self,
+                auto_login=self._auto_login_active(),
+            )
+            self._web_dialog = web_dialog
+            web_dialog.login_requested.connect(
+                lambda email, password, pid=profile.id, prod=product_id: (
+                    self._start_webview_login(pid, email, password, prod)
+                )
+            )
+            web_dialog.exec()
+            self._web_dialog = None
+            # The dialog closed — on success the login already finished; on
+            # cancel/close one may still be in flight, so abort it. The
+            # helper process itself stays warm for the next attempt (it is
+            # shut down after a successful game launch or on app exit).
+            self._abort_webview_login()
+            self.refresh()
+            return
         dialog = LoginDialog(self._api, parent=self)
         dialog.token_issued.connect(
             lambda token, email, pid=profile.id, prod=product_id: (
@@ -636,10 +737,108 @@ class MainWindow(QMainWindow):
                 created_at=existing.created_at,
                 last_used_at=existing.last_used_at,
                 email=new_email,
+                password=existing.password,
             )
         )
         self.refresh()
         self._launch_game(product_id)
+
+    # --- webview login (via the __loginhelper process) ---
+
+    def _ensure_webview_client(self) -> WebviewLoginClient:
+        """The lazily-created, signal-wired login client (one per window).
+
+        Created once and reused so the underlying ``__loginhelper``
+        process stays warm across login attempts.
+        """
+        if self._webview_client is None:
+            client = WebviewLoginClient(self)
+            client.engineReady.connect(self._on_webview_engine_ready)
+            client.succeeded.connect(self._on_webview_succeeded)
+            client.failed.connect(self._on_webview_failed)
+            self._webview_client = client
+        return self._webview_client
+
+    def _start_webview_login(
+        self, profile_id: str, email: str, password: str, product_id: str
+    ) -> None:
+        """Kick off the webview login for ``profile_id`` via the helper.
+
+        The dialog already shows "웹뷰 로드중" (enter_progress). The
+        ``__loginhelper`` process is spawned asynchronously on the first
+        attempt and reused afterwards; when the helper reports its engine
+        is up we flip the status to "로그인 중". A missing helper just
+        fails gracefully.
+        """
+        try:
+            login_url = self._api.get_login_url()
+        except DmmApiError as e:
+            self._report_webview_failure(str(e))
+            return
+        self._webview_login_ctx = (profile_id, product_id)
+        self._ensure_webview_client().start(login_url, email, password)
+
+    def _on_webview_engine_ready(self) -> None:
+        if self._web_dialog is not None:
+            self._web_dialog.set_progress_status(t("weblogin.progress"))
+
+    def _on_webview_succeeded(self, code: str) -> None:
+        ctx, self._webview_login_ctx = self._webview_login_ctx, None
+        if ctx is None:
+            return
+        profile_id, product_id = ctx
+        self._on_webview_code(profile_id, code, product_id)
+
+    def _on_webview_failed(self, reason: str) -> None:
+        self._webview_login_ctx = None
+        self._report_webview_failure(reason)
+
+    def _on_webview_code(
+        self, profile_id: str, code: str, product_id: str
+    ) -> None:
+        try:
+            token = self._api.issue_token(code)
+        except DmmApiError as e:
+            self._report_webview_failure(str(e))
+            return
+        existing = self._profile_store.get(profile_id)
+        if existing is None:
+            return
+        self._profile_store.update(replace(existing, token=token))
+        # Close the progress dialog, then launch once the modal loop has
+        # unwound (avoids opening the launch progress dialog re-entrantly).
+        if self._web_dialog is not None:
+            self._web_dialog.accept()
+        self.refresh()
+        QTimer.singleShot(0, lambda: self._launch_game(product_id))
+
+    def _abort_webview_login(self) -> None:
+        """Abort an in-flight login; the helper process stays warm."""
+        self._webview_login_ctx = None
+        if self._webview_client is not None:
+            self._webview_client.abort()
+
+    def _shutdown_webview_helper(self) -> None:
+        """Terminate the warm ``__loginhelper`` process (if any)."""
+        if self._webview_client is not None:
+            self._webview_client.shutdown()
+
+    def _report_webview_failure(self, reason: str) -> None:
+        # The raw reason code stays on the console for diagnostics.
+        print(f"[webview-login] failed: {reason}", file=sys.stderr)
+        text = _webview_failure_text(reason)
+        # If the credential form is still open, surface the error there (it's
+        # in its progress state) so the user can retry; otherwise toast.
+        if self._web_dialog is not None:
+            if text is not None:
+                self._web_dialog.show_error(text)
+            else:
+                # Unmapped → DMM's own message: show it verbatim + copyable.
+                self._web_dialog.show_error(site_message=reason)
+        else:
+            self.show_toast(
+                t("webview_login.failed", reason=text if text is not None else reason)
+            )
 
     def _launch_game(self, product_id: str) -> None:
         installed = self._installed_by_id.get(product_id)
@@ -678,6 +877,19 @@ class MainWindow(QMainWindow):
 
         dialog = ProgressDialog(t("main.progress_dialog.title"), thread, parent=self)
         worker.progress.connect(dialog.set_progress)
+        # Expired/invalid token. With auto-login on (and not already retried
+        # once for this product), silently close the dialog and schedule an
+        # automatic logout + re-login after exec() returns. Otherwise fall
+        # back to the manual logout button on the error dialog.
+        auto_relogin = (
+            self._auto_login_active()
+            and product_id not in self._auto_relogin_attempted
+        )
+        worker.auth_invalid.connect(
+            lambda dlg=dialog, prof=profile, pid=product_id, auto=auto_relogin: (
+                self._on_launch_auth_invalid(dlg, prof, pid, auto)
+            )
+        )
         worker.finished.connect(dialog.finish)
 
         worker.finished.connect(
@@ -692,6 +904,65 @@ class MainWindow(QMainWindow):
         thread.start()
         dialog.exec()
 
+        # Auto-login: the launch failed on an expired token — log out and
+        # re-run the launch (which now routes through the login flow, and
+        # auto-submits the saved credentials). Bounded to one retry per
+        # product so a persistently-rejected token can't loop.
+        if self._auto_relogin_pending == product_id:
+            self._auto_relogin_pending = None
+            self._auto_relogin_attempted.add(product_id)
+            self._logout_from_launch(profile, product_id)
+            self._launch_game(product_id)
+
+    def _on_launch_auth_invalid(
+        self,
+        dialog: ProgressDialog,
+        profile: Profile,
+        product_id: str,
+        auto: bool,
+    ) -> None:
+        """React to a launch's expired/invalid-token signal.
+
+        Auto-login: mark the product for an automatic logout+retry (handled
+        after ``exec()`` returns) and close the progress dialog so the user
+        never sees the error. Otherwise, offer the manual logout button.
+        """
+        if auto:
+            self._auto_relogin_pending = product_id
+            # Close the modal dialog on the next tick (finish() runs right
+            # after this signal; deferring lets it settle first).
+            QTimer.singleShot(0, dialog.reject)
+        else:
+            dialog.enable_logout(
+                lambda: self._logout_from_launch(profile, product_id)
+            )
+
+    def _logout_from_launch(self, profile: Profile, product_id: str) -> None:
+        """Clear the profile's token in response to an auth failure.
+
+        Invoked by the logout button the ProgressDialog shows when a
+        launch fails with an expired/invalid token. Re-reads the profile
+        from the store (it may have changed since the launch began) and
+        writes it back with ``token=None`` so the next launch routes
+        through the login flow. Silent-mode launches have already
+        revealed the main window by this point, so the toast is visible.
+        """
+        existing = self._profile_store.get(profile.id)
+        if existing is not None and existing.token:
+            self._profile_store.update(
+                Profile(
+                    id=existing.id,
+                    name=existing.name,
+                    token=None,
+                    created_at=existing.created_at,
+                    last_used_at=existing.last_used_at,
+                    email=existing.email,
+                    password=existing.password,
+                )
+            )
+        self.refresh()
+        self.show_toast(t("main.logout_done", name=profile.name))
+
     def _on_launch_finished(
         self,
         success: bool,
@@ -702,6 +973,11 @@ class MainWindow(QMainWindow):
         cfg: GameConfig,
     ) -> None:
         if not success:
+            # Auto-login is about to log out and retry this product (the
+            # dialog was closed silently), so don't surface the failure —
+            # the retry runs once exec() returns.
+            if self._auto_relogin_pending == product_id:
+                return
             # The progress dialog already showed the error to the user.
             # In silent mode the main window was never visible, so once
             # they dismiss the error there's nowhere to go — surface
@@ -712,6 +988,9 @@ class MainWindow(QMainWindow):
                 self.raise_()
                 self.activateWindow()
             return
+        # A launch succeeded → this product is healthy again; drop any
+        # auto-relogin bookkeeping so a future expired token can retry.
+        self._auto_relogin_attempted.discard(product_id)
         # Stamp last_used / last_played
         self._profile_store.update(
             Profile(
@@ -721,17 +1000,12 @@ class MainWindow(QMainWindow):
                 created_at=profile.created_at,
                 last_used_at=utc_now(),
                 email=profile.email,
+                password=profile.password,
             )
         )
-        self._game_store.upsert(
-            GameConfig(
-                product_id=cfg.product_id,
-                exe_path=cfg.exe_path,
-                profile_id=cfg.profile_id,
-                favorite=cfg.favorite,
-                last_played_at=utc_now(),
-            )
-        )
+        self._game_store.upsert(replace(cfg, last_played_at=utc_now()))
+        # The game is up — the warm login helper has served its purpose.
+        self._shutdown_webview_helper()
         # Track the running subprocess so the card flips to "실행 중".
         if isinstance(popen, subprocess.Popen):
             self._running[product_id] = _RunningGame(

@@ -47,6 +47,10 @@ class Profile:
     created_at: datetime
     last_used_at: datetime | None = None
     email: str | None = None
+    # Saved DMM login password for the webview login flow. Encrypted at
+    # rest via DPAPI (same envelope as ``token``); ``None`` when the user
+    # hasn't entered credentials for the in-app form.
+    password: str | None = None
 
 
 class ProfileStoreError(RuntimeError):
@@ -165,11 +169,12 @@ class ProfileStore:
             for entry in raw_profiles:
                 if not isinstance(entry, dict):
                     continue
-                t = entry.get("token")
-                if (
-                    isinstance(t, str)
-                    and t
-                    and not t.startswith(secure_storage.PREFIX)
+                secrets = (entry.get("token"), entry.get("password"))
+                if any(
+                    isinstance(s, str)
+                    and s
+                    and not s.startswith(secure_storage.PREFIX)
+                    for s in secrets
                 ):
                     self._has_plaintext_tokens = True
                     break
@@ -219,10 +224,12 @@ class ProfileStore:
         # platforms ``encrypt`` is a no-op so the value round-trips as
         # plaintext (good enough for tests and dev shells).
         token = secure_storage.encrypt(p.token) if p.token else p.token
+        password = secure_storage.encrypt(p.password) if p.password else p.password
         return {
             "id": p.id,
             "name": p.name,
             "token": token,
+            "password": password,
             "email": p.email,
             "created_at": p.created_at.isoformat(),
             "last_used_at": p.last_used_at.isoformat() if p.last_used_at else None,
@@ -241,11 +248,15 @@ class ProfileStore:
         # which we surface as ``None`` so the UI prompts a re-login.
         decrypted = secure_storage.decrypt(raw_token) if raw_token else ""
         token = decrypted if decrypted else None
+        raw_password = d.get("password") if isinstance(d.get("password"), str) else None
+        decrypted_pw = secure_storage.decrypt(raw_password) if raw_password else ""
+        password = decrypted_pw if decrypted_pw else None
         return Profile(
             id=str(d["id"]),
             name=str(d["name"]),
             token=token,
             email=d.get("email") if isinstance(d.get("email"), str) else None,
+            password=password,
             created_at=datetime.fromisoformat(str(d["created_at"])),
             last_used_at=(
                 datetime.fromisoformat(str(last_used_raw)) if last_used_raw else None

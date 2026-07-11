@@ -1,14 +1,20 @@
-# Single-file Windows exe build.
+# Windows build wrapper.
 #
 # Usage (from anywhere):
-#     .\build.ps1
+#     .\build.ps1                     # both exes (main + helper)
+#     .\build.ps1 --target main       # main app only (browser-only install)
+#     .\build.ps1 --target helper     # webview login helper only
 #
-# Or right-click → "Run with PowerShell" from File Explorer.
+# Or right-click -> "Run with PowerShell" from File Explorer.
 #
-# This is a thin wrapper around ``scripts\build_exe.py`` — it just
-# anchors the working directory to the script's location, ensures
-# dependencies are synced, runs the Python build orchestrator, and
-# reports the resulting exe path / size.
+# Thin wrapper around ``scripts\build_exe.py``: anchors the working
+# directory, syncs dependencies, forwards any args to the Python build
+# orchestrator, and reports the resulting exe(s) / size(s).
+#
+# Produces TWO single-file exes in ``dist\``:
+#   shantytown.exe      - the app (QtWebEngine excluded; fast startup)
+#   __loginhelper.exe    - webview login engine (spawned on demand)
+# Ship them together in one folder. shantytown.exe alone = browser-only.
 
 $ErrorActionPreference = 'Stop'
 
@@ -22,19 +28,22 @@ if ($LASTEXITCODE -ne 0) {
     exit $LASTEXITCODE
 }
 
-Write-Host "==> python scripts\build_exe.py" -ForegroundColor Cyan
-uv run python scripts/build_exe.py
+Write-Host "==> python scripts\build_exe.py $args" -ForegroundColor Cyan
+uv run python scripts/build_exe.py @args
 if ($LASTEXITCODE -ne 0) {
     Write-Host "build_exe.py failed (exit $LASTEXITCODE)" -ForegroundColor Red
     exit $LASTEXITCODE
 }
 
-$Exe = Join-Path $Root 'dist\shantytown.exe'
-if (Test-Path $Exe) {
-    $sizeMB = "{0:N1} MB" -f ((Get-Item $Exe).Length / 1MB)
+$Exes = Get-ChildItem -Path (Join-Path $Root 'dist') -File -Filter '*.exe' -ErrorAction SilentlyContinue |
+    Where-Object { $_.Name -in @('shantytown.exe', '__loginhelper.exe') }
+if ($Exes) {
     Write-Host ""
-    Write-Host "Built: $Exe ($sizeMB)" -ForegroundColor Green
+    foreach ($e in $Exes) {
+        $sizeMB = "{0:N0} MB" -f ($e.Length / 1MB)
+        Write-Host "Built: $($e.FullName) ($sizeMB)" -ForegroundColor Green
+    }
 } else {
-    Write-Host "Build did not produce dist\shantytown.exe" -ForegroundColor Red
+    Write-Host "Build did not produce dist\shantytown.exe or __loginhelper.exe" -ForegroundColor Red
     exit 1
 }

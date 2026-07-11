@@ -341,8 +341,9 @@ class GameCard(QFrame):
         )
         self._profile_combo.addItem(default_label, None)
         for p in profiles:
-            label = p.name + (f" <{p.email}>" if p.email else "")
-            self._profile_combo.addItem(label, p.id)
+            # Name only — the email is intentionally omitted here (it's shown
+            # in the profile manager instead) to keep the card dropdown tidy.
+            self._profile_combo.addItem(p.name, p.id)
 
         target_id = config.profile_id if config is not None else None
         for i in range(self._profile_combo.count()):

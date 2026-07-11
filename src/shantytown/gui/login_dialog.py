@@ -24,9 +24,7 @@ keep the UI responsive.
 
 from __future__ import annotations
 
-import re
 from collections.abc import Callable
-from urllib.parse import parse_qs, urlparse
 
 from PyQt6.QtCore import (
     QObject,
@@ -53,9 +51,14 @@ from PyQt6.QtWidgets import (
 from shantytown.core.api import DmmApiClient, DmmApiError
 from shantytown.core.i18n import t
 
+# Re-exported for backwards compatibility: the canonical implementation now
+# lives in core.login_parsing (Qt-free, shared with the webview login agent).
+from shantytown.core.login_parsing import extract_code
+
 POLL_INTERVAL_MS = 500
 DEFAULT_TIMEOUT_MS = 5 * 60 * 1000  # 5 minutes
-_CODE_RE = re.compile(r"[?&]code=([^&\s]+)")
+
+__all__ = ["LoginDialog", "extract_code"]
 
 # Inline styling — kept in one place so future theme work has a single
 # touch point. We use ``palette(...)`` references everywhere a background
@@ -91,33 +94,6 @@ _PRIMARY_BUTTON = (
     "QPushButton:disabled { background-color: palette(mid); color: palette(placeholder-text); }"
     "QPushButton:hover:!disabled { background-color: #1d4ed8; }"
 )
-
-
-def extract_code(text: str) -> str | None:
-    """Pull the OAuth ``code`` parameter out of ``text`` if present.
-
-    Accepts both well-formed URLs (``https://...?code=abc``) and
-    custom-scheme URLs (``dmmgameplayer5://...?code=abc``). Returns
-    ``None`` if no code is found.
-    """
-    if not text:
-        return None
-    text = text.strip()
-    # Try proper URL parsing first — handles encoded values cleanly.
-    try:
-        parsed = urlparse(text)
-        if parsed.query:
-            qs = parse_qs(parsed.query)
-            code = qs.get("code", [None])[0]
-            if code:
-                return code
-    except ValueError:
-        pass
-    # Fallback regex — works on bare query fragments and odd shapes.
-    m = _CODE_RE.search(text)
-    if m:
-        return m.group(1)
-    return None
 
 
 class _IssueTokenWorker(QObject):

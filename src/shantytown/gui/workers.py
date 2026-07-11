@@ -69,6 +69,10 @@ class LaunchWorker(QObject):
 
     progress = pyqtSignal(str, int, int)
     finished = pyqtSignal(bool, str, object)
+    # Emitted (before ``finished``) when the launch fails specifically
+    # because the stored token was rejected as expired/invalid. Lets the
+    # UI offer an inline "log out" action instead of only text guidance.
+    auth_invalid = pyqtSignal()
 
     def __init__(
         self,
@@ -105,6 +109,10 @@ class LaunchWorker(QObject):
             msg = t("worker.error.auth_invalid")
             if is_debug() and e.detail:
                 msg += f"\n\n{t('worker.detail_separator')}\n{e.detail}"
+            # Signal the specific auth failure first so the progress
+            # dialog can wire up its logout button before ``finish``
+            # rebuilds the button row.
+            self.auth_invalid.emit()
             self.finished.emit(False, msg, None)
         except DmmApiError as e:
             msg = t("worker.error.api", error=str(e))

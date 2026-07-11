@@ -10,9 +10,16 @@ message (everything after the first blank line) and reveals it in a
 scrollable, read-only text view. This keeps short errors compact while
 still letting users copy a full DMM launch response when running with
 ``--debug``.
+
+When the failure is an expired/invalid token, the owner can call
+:py:meth:`enable_logout` (before ``finish`` runs) to add a "log out"
+action button to the error dialog so the user can re-authenticate
+without hunting through the profile manager.
 """
 
 from __future__ import annotations
+
+from collections.abc import Callable
 
 from PyQt6.QtCore import Qt, QThread
 from PyQt6.QtWidgets import (
@@ -26,6 +33,14 @@ from PyQt6.QtWidgets import (
 )
 
 from shantytown.core.i18n import t
+
+# Muted red for the destructive logout action — mirrors the danger
+# button in the profile dialog so the two read as the same affordance.
+_DANGER_BUTTON = (
+    "QPushButton { background-color: #c25555; color: white; border: none; "
+    "padding: 6px 14px; border-radius: 4px; }"
+    "QPushButton:hover:!disabled { background-color: #a44545; }"
+)
 
 
 class ProgressDialog(QDialog):
@@ -63,10 +78,22 @@ class ProgressDialog(QDialog):
         self._root.addWidget(self._bar)
 
         self._detail_view: QPlainTextEdit | None = None
+        # Set via ``enable_logout`` before ``finish`` runs; when present,
+        # the failure branch adds a logout button that invokes it.
+        self._logout_callback: Callable[[], None] | None = None
 
         self._buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Cancel)
         self._buttons.rejected.connect(self._on_cancel)
         self._root.addWidget(self._buttons)
+
+    def enable_logout(self, callback: Callable[[], None]) -> None:
+        """Offer a logout action on the error screen.
+
+        Call this before :py:meth:`finish` (e.g. from the worker's
+        ``auth_invalid`` signal). ``callback`` runs when the user clicks
+        the button; the dialog closes itself afterwards.
+        """
+        self._logout_callback = callback
 
     def set_progress(self, message: str, current: int, total: int) -> None:
         """Slot for ``LaunchWorker.progress``."""
@@ -96,12 +123,25 @@ class ProgressDialog(QDialog):
         if detail:
             self._show_detail(detail)
 
-        # Swap Cancel for Close
+        # Swap Cancel for Close, optionally preceded by a logout action.
         self._buttons.clear()
-        self._buttons.addButton(QDialogButtonBox.StandardButton.Close)
         self._buttons.rejected.disconnect()
+        if self._logout_callback is not None:
+            logout_btn = self._buttons.addButton(
+                t("progress.logout_button"),
+                QDialogButtonBox.ButtonRole.ActionRole,
+            )
+            if logout_btn is not None:
+                logout_btn.setStyleSheet(_DANGER_BUTTON)
+                logout_btn.clicked.connect(self._on_logout)
+        self._buttons.addButton(QDialogButtonBox.StandardButton.Close)
         self._buttons.rejected.connect(self.reject)
-        self._buttons.clicked.connect(lambda _b: self.reject())
+
+    def _on_logout(self) -> None:
+        """Run the logout callback, then close the dialog."""
+        if self._logout_callback is not None:
+            self._logout_callback()
+        self.reject()
 
     def _show_detail(self, detail: str) -> None:
         if self._detail_view is None:
