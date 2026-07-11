@@ -271,6 +271,96 @@ def test_password_encrypted_on_disk_when_dpapi_supported(store_path):
     assert ProfileStore(store_path).get(p.id).password == "super-secret-pw-12345"
 
 
+def test_new_store_writes_version_2(store_path):
+    s = ProfileStore(store_path)
+    s.create("alice", token="tok")
+    raw = json.loads(store_path.read_text(encoding="utf-8"))
+    assert raw["version"] == 2
+
+
+def test_secret_is_double_encrypted_on_disk_when_dpapi_supported(store_path):
+    """On Windows the on-disk token is DPAPI(AES(token)): DPAPI on the
+    outside, and peeling it reveals the AES envelope — not the token."""
+    import sys
+
+    if sys.platform != "win32":
+        pytest.skip("DPAPI only on Windows")
+    from shantytown.core import secure_storage
+
+    s = ProfileStore(store_path)
+    s.create("alice", token="double-wrapped-secret-123")
+    raw = json.loads(store_path.read_text(encoding="utf-8"))
+    on_disk = raw["profiles"][0]["token"]
+    assert on_disk.startswith("dpapi:v1:")
+    assert "double-wrapped-secret-123" not in on_disk
+    # Peel only the DPAPI layer → still AES ciphertext, not the secret.
+    inner = secure_storage.decrypt(on_disk)
+    assert inner.startswith(secure_storage.AES_PREFIX)
+    assert "double-wrapped-secret-123" not in inner
+    # Full round-trip still works.
+    assert ProfileStore(store_path).get(s.list()[0].id).token == (
+        "double-wrapped-secret-123"
+    )
+
+
+def test_migrates_v1_dpapi_only_to_v2_double_on_open(store_path):
+    """A v1 file whose token is DPAPI-only (no AES) is re-encrypted to
+    the v2 double layer on open, without a re-login."""
+    import sys
+
+    if sys.platform != "win32":
+        pytest.skip("DPAPI only on Windows")
+    from shantytown.core import secure_storage
+
+    # Hand-build a v1 file: DPAPI-encrypted token, version 1, no AES.
+    v1_token = secure_storage.encrypt("legacy-v1-token")
+    assert v1_token.startswith("dpapi:v1:")
+    legacy = {
+        "version": 1,
+        "default_profile_id": "p1",
+        "profiles": [
+            {
+                "id": "p1",
+                "name": "alice",
+                "token": v1_token,
+                "email": None,
+                "created_at": datetime.now(UTC).isoformat(),
+                "last_used_at": None,
+            }
+        ],
+    }
+    store_path.write_text(json.dumps(legacy), encoding="utf-8")
+
+    # Opening migrates: token decrypts in memory, file becomes v2 double.
+    s = ProfileStore(store_path)
+    assert s.get("p1").token == "legacy-v1-token"
+
+    on_disk = json.loads(store_path.read_text(encoding="utf-8"))
+    assert on_disk["version"] == 2
+    migrated = on_disk["profiles"][0]["token"]
+    assert migrated.startswith("dpapi:v1:")
+    # Now double-wrapped: peeling DPAPI reveals the AES envelope.
+    assert secure_storage.decrypt(migrated).startswith(secure_storage.AES_PREFIX)
+
+
+def test_migration_keyed_to_id_wrong_id_cannot_decrypt(store_path):
+    """The AES key is the profile id: a secret encrypted under one
+    profile's id is unreadable if moved under a different id."""
+    import sys
+
+    if sys.platform != "win32":
+        pytest.skip("DPAPI only on Windows")
+    from shantytown.core import secure_storage
+
+    s = ProfileStore(store_path)
+    p = s.create("alice", token="id-bound-secret")
+    raw = json.loads(store_path.read_text(encoding="utf-8"))
+    stored_token = raw["profiles"][0]["token"]
+    # Correct id decrypts; a different id does not.
+    assert secure_storage.decrypt_secret(stored_token, p.id) == "id-bound-secret"
+    assert secure_storage.decrypt_secret(stored_token, "some-other-id") == ""
+
+
 def test_auto_migrates_legacy_plaintext_on_open(store_path):
     """A pre-DPAPI profiles.json with plaintext tokens gets re-saved
     in encrypted form the first time it's loaded, without requiring

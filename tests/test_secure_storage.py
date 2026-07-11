@@ -74,6 +74,87 @@ def test_decrypt_corrupted_blob_returns_empty():
     assert secure_storage.decrypt(fake) == ""
 
 
+# --- AES layer (cross-platform) ---
+
+
+def test_aes_round_trip():
+    original = "secret-tok-한글-混合"
+    blob = secure_storage.aes_encrypt(original, "profile-id-1")
+    assert blob.startswith(secure_storage.AES_PREFIX)
+    assert original not in blob  # not sitting there in plaintext
+    assert secure_storage.aes_decrypt(blob, "profile-id-1") == original
+
+
+def test_aes_empty_passthrough():
+    assert secure_storage.aes_encrypt("", "id") == ""
+    assert secure_storage.aes_decrypt("", "id") == ""
+
+
+def test_aes_decrypt_passes_through_unmarked_value():
+    # A legacy plaintext / DPAPI-only value has no AES marker → untouched.
+    assert secure_storage.aes_decrypt("plain-token", "id") == "plain-token"
+
+
+def test_aes_nonce_makes_each_ciphertext_unique():
+    a = secure_storage.aes_encrypt("same", "id")
+    b = secure_storage.aes_encrypt("same", "id")
+    assert a != b
+    assert secure_storage.aes_decrypt(a, "id") == "same"
+    assert secure_storage.aes_decrypt(b, "id") == "same"
+
+
+def test_aes_wrong_profile_id_fails_to_decrypt():
+    """The id is the key — decrypting with a different id must not work."""
+    blob = secure_storage.aes_encrypt("secret", "id-A")
+    assert secure_storage.aes_decrypt(blob, "id-B") == ""
+
+
+def test_aes_tampered_blob_returns_empty():
+    import base64
+
+    blob = secure_storage.AES_PREFIX + base64.b64encode(b"x" * 40).decode()
+    assert secure_storage.aes_decrypt(blob, "id") == ""
+
+
+# --- double-encrypted secret (AES + DPAPI) ---
+
+
+def test_encrypt_secret_round_trips():
+    original = "super-secret-token"
+    blob = secure_storage.encrypt_secret(original, "pid-1")
+    assert original not in blob
+    assert secure_storage.decrypt_secret(blob, "pid-1") == original
+
+
+def test_encrypt_secret_empty_passthrough():
+    assert secure_storage.encrypt_secret("", "pid") == ""
+    assert secure_storage.decrypt_secret("", "pid") == ""
+
+
+def test_decrypt_secret_handles_legacy_plaintext():
+    # Pre-DPAPI plaintext (no markers at all) still decodes to itself.
+    assert secure_storage.decrypt_secret("old-plain-token", "pid") == "old-plain-token"
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="DPAPI is a Win32 API")
+def test_encrypt_secret_is_double_wrapped_on_windows():
+    """On Windows the stored value is DPAPI(AES(secret)): the outer layer
+    is DPAPI, and peeling it reveals the AES envelope, not the secret."""
+    blob = secure_storage.encrypt_secret("my-secret", "pid-1")
+    assert blob.startswith(secure_storage.PREFIX)  # outer = DPAPI
+    inner = secure_storage.decrypt(blob)  # peel DPAPI only
+    assert inner.startswith(secure_storage.AES_PREFIX)  # inner = AES
+    assert "my-secret" not in inner  # still ciphertext, not the secret
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="DPAPI is a Win32 API")
+def test_decrypt_secret_handles_v1_dpapi_only():
+    """A v1 value (DPAPI over the raw secret, no AES) still decrypts —
+    that's what makes the v1 → v2 migration read the old file."""
+    v1 = secure_storage.encrypt("raw-secret")  # DPAPI-only, no AES
+    assert secure_storage.decrypt_secret(v1, "pid-1") == "raw-secret"
+
+
 # --- non-Windows fallback ---
 
 

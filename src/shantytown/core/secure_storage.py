@@ -23,16 +23,51 @@ Storage format is a versioned text envelope so:
 - ``decrypt`` returns ``""`` on any failure (corrupted blob, user
   account changed, …) so the UI nudges the user to log in again
   rather than crashing.
+
+Second layer — AES against generic infostealers
+-----------------------------------------------
+A generic infostealer sweeps ``%APPDATA%`` and blindly runs
+``CryptUnprotectData`` over every DPAPI blob it finds (it runs as the
+user, so DPAPI hands the plaintext right back). To make our profiles
+worthless to that automated sweep, :func:`encrypt_secret` wraps the
+value in **AES-256-GCM first, then DPAPI** — so peeling DPAPI only
+yields more ciphertext. The AES key is derived from the profile's own
+id (``shanty_{id}``), which stays plaintext in the file; this is
+deliberately *not* a defence against a targeted attacker who reads our
+source and the file, only against the blind mass-decrypt sweep. DPAPI
+remains the real user-binding boundary; AES is the extra obfuscation on
+top.
 """
 
 from __future__ import annotations
 
 import base64
 import ctypes
+import hashlib
+import os
 import sys
 from ctypes import wintypes
 
+from cryptography.exceptions import InvalidTag
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+
 PREFIX = "dpapi:v1:"
+
+# Inner (AES) envelope marker. A stored secret that survives DPAPI
+# decryption and still carries this prefix must be AES-unwrapped; one
+# that doesn't is a legacy plaintext / DPAPI-only value and passes
+# through untouched (that's what keeps old files loading).
+AES_PREFIX = "aes256:gcm:"
+_NONCE_LEN = 12  # 96-bit nonce, the AES-GCM standard
+
+
+def _aes_key(profile_id: str) -> bytes:
+    """Derive a 32-byte AES-256 key from the profile id.
+
+    The key material is ``shanty_{id}`` (the id is unique per profile);
+    SHA-256 stretches it to the 32 bytes AES-256 needs.
+    """
+    return hashlib.sha256(f"shanty_{profile_id}".encode()).digest()
 
 # Optional entropy passed to CryptProtectData. Calling
 # ``CryptUnprotectData`` without the matching entropy returns failure
@@ -83,6 +118,72 @@ def decrypt(stored: str) -> str:
         return _crypt_unprotect(blob).decode("utf-8")
     except OSError:
         return ""
+
+
+# --- AES layer (keyed by profile id) ---------------------------------
+
+
+def aes_encrypt(plaintext: str, profile_id: str) -> str:
+    """AES-256-GCM encrypt ``plaintext`` under the ``shanty_{id}`` key.
+
+    Returns ``"aes256:gcm:<b64(nonce+ciphertext)>"``. Empty input is
+    returned unchanged so callers can pass optional fields straight
+    through. Cross-platform (no Windows dependency).
+    """
+    if not plaintext:
+        return plaintext
+    nonce = os.urandom(_NONCE_LEN)
+    ct = AESGCM(_aes_key(profile_id)).encrypt(
+        nonce, plaintext.encode("utf-8"), None
+    )
+    return AES_PREFIX + base64.b64encode(nonce + ct).decode("ascii")
+
+
+def aes_decrypt(stored: str, profile_id: str) -> str:
+    """Reverse of :func:`aes_encrypt`.
+
+    A value without the ``aes256:gcm:`` marker is treated as already
+    unwrapped (legacy plaintext / DPAPI-only) and returned as-is.
+    Returns ``""`` on any AES failure (wrong key, tampered blob).
+    """
+    if not stored or not stored.startswith(AES_PREFIX):
+        return stored
+    try:
+        raw = base64.b64decode(stored[len(AES_PREFIX):])
+    except ValueError:
+        return ""
+    nonce, ct = raw[:_NONCE_LEN], raw[_NONCE_LEN:]
+    try:
+        return AESGCM(_aes_key(profile_id)).decrypt(nonce, ct, None).decode(
+            "utf-8"
+        )
+    except (InvalidTag, ValueError):
+        return ""
+
+
+def encrypt_secret(plaintext: str, profile_id: str) -> str:
+    """Double-encrypt a profile secret: AES-256-GCM, then DPAPI.
+
+    The AES layer (keyed by the profile id) means a generic infostealer
+    that mass-runs ``CryptUnprotectData`` only recovers AES ciphertext.
+    On non-Windows the DPAPI step is a no-op, leaving the AES envelope.
+    """
+    if not plaintext:
+        return plaintext
+    return encrypt(aes_encrypt(plaintext, profile_id))
+
+
+def decrypt_secret(stored: str, profile_id: str) -> str:
+    """Reverse of :func:`encrypt_secret` — DPAPI first, then AES.
+
+    Handles every prior format transparently via the envelope markers:
+    ``dpapi(aes(secret))`` (v2), ``dpapi(secret)`` (v1, DPAPI-only), and
+    bare plaintext (pre-DPAPI) all decode to the original secret.
+    Returns ``""`` on any failure so the UI prompts a re-login.
+    """
+    if not stored:
+        return ""
+    return aes_decrypt(decrypt(stored), profile_id)
 
 
 # --- ctypes binding --------------------------------------------------

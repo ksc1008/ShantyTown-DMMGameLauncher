@@ -11,11 +11,20 @@ Default-profile rules (per the product spec, not the original doc):
   profile, or ``None`` if the store is now empty.
 - ``set_default`` on a non-existent id raises ``ProfileStoreError``.
 
-Tokens are encrypted via Windows DPAPI (see
-``shantytown.core.secure_storage``) on save and decrypted on load.
-Plaintext tokens written by older versions of the app keep loading
-unchanged — they pick up encryption the next time the profile is
-saved, so no explicit migration step is required.
+Secrets (token + password) are double-encrypted at rest (see
+``shantytown.core.secure_storage``): AES-256-GCM keyed by the profile
+id, then Windows DPAPI on top. The AES layer makes the file useless to
+a generic infostealer that blindly mass-decrypts DPAPI blobs.
+
+Storage format is versioned:
+
+- **v1** — DPAPI-only (or bare plaintext from before DPAPI).
+- **v2** — the AES-then-DPAPI double layer described above.
+
+Both keep loading unchanged thanks to the envelope markers. On open, a
+file still at v1 is transparently re-encrypted to v2 and rewritten, so
+existing users get the extra layer on their next boot without any
+action (and without having to re-login).
 """
 
 from __future__ import annotations
@@ -30,7 +39,7 @@ from typing import Any
 
 from shantytown.core import secure_storage
 
-CURRENT_VERSION = 1
+CURRENT_VERSION = 2
 
 
 def _utcnow() -> datetime:
@@ -69,14 +78,20 @@ class ProfileStore:
 
     def __init__(self, path: Path) -> None:
         self._path = path
-        # ``_load`` flips ``_has_plaintext_tokens`` to True if any
-        # token in the file lacks the DPAPI marker. We use that to
-        # trigger an immediate re-save below so existing users get
-        # their tokens encrypted at rest on the very next boot after
+        # ``_load`` flips ``_has_plaintext_tokens`` to True if any secret
+        # in the file lacks the DPAPI marker (legacy plaintext, or an
+        # AES-only value written on a non-Windows host). We use that to
+        # trigger an immediate re-save so existing users get their
+        # secrets encrypted at rest on the very next boot after
         # upgrading — without waiting for a profile mutation.
         self._has_plaintext_tokens = False
         self._data = self._load()
-        if secure_storage.is_supported() and self._has_plaintext_tokens:
+        # Migrate an older on-disk format to the current one (e.g. v1
+        # DPAPI-only → v2 AES+DPAPI). The re-save rewrites every secret
+        # through the current double-encryption and bumps the version.
+        needs_upgrade = self._data.version < CURRENT_VERSION
+        add_dpapi = secure_storage.is_supported() and self._has_plaintext_tokens
+        if needs_upgrade or add_dpapi:
             self._save()
 
     # --- public API ---
@@ -189,8 +204,10 @@ class ProfileStore:
         if default_id is not None and not isinstance(default_id, str):
             default_id = None
 
+        # Absent version ⇒ assume the oldest format so the migration on
+        # open re-encrypts it, rather than silently trusting it as current.
         return _StoreData(
-            version=int(raw.get("version", CURRENT_VERSION)),
+            version=int(raw.get("version", 1)),
             default_profile_id=default_id,
             profiles=profiles,
         )
@@ -206,8 +223,11 @@ class ProfileStore:
             pass
 
     def _save(self) -> None:
+        # Any save writes the current format, so stamp the current version
+        # (this is also what completes a v1 → v2 migration).
+        self._data.version = CURRENT_VERSION
         payload: dict[str, Any] = {
-            "version": self._data.version,
+            "version": CURRENT_VERSION,
             "default_profile_id": self._data.default_profile_id,
             "profiles": [self._profile_to_dict(p) for p in self._data.profiles],
         }
@@ -220,11 +240,13 @@ class ProfileStore:
 
     @staticmethod
     def _profile_to_dict(p: Profile) -> dict[str, Any]:
-        # Tokens go through DPAPI encryption on Windows; on other
-        # platforms ``encrypt`` is a no-op so the value round-trips as
-        # plaintext (good enough for tests and dev shells).
-        token = secure_storage.encrypt(p.token) if p.token else p.token
-        password = secure_storage.encrypt(p.password) if p.password else p.password
+        # Secrets are double-encrypted: AES-256-GCM (keyed by the profile
+        # id) then DPAPI. On non-Windows the DPAPI step is a no-op, so the
+        # value round-trips as the AES envelope (still not plaintext).
+        token = secure_storage.encrypt_secret(p.token, p.id) if p.token else p.token
+        password = (
+            secure_storage.encrypt_secret(p.password, p.id) if p.password else p.password
+        )
         return {
             "id": p.id,
             "name": p.name,
@@ -240,19 +262,26 @@ class ProfileStore:
         if not isinstance(d, dict):
             raise TypeError("profile entry must be a JSON object")
         last_used_raw = d.get("last_used_at")
+        profile_id = str(d["id"])  # also the AES key material
         raw_token = d.get("token") if isinstance(d.get("token"), str) else None
-        # ``decrypt`` returns the input unchanged when the value carries
-        # no ``dpapi:v1:`` marker — that's how plaintext tokens written
-        # by older versions of the app keep working. A genuine DPAPI
-        # failure (corrupted blob, user account changed) returns "",
-        # which we surface as ``None`` so the UI prompts a re-login.
-        decrypted = secure_storage.decrypt(raw_token) if raw_token else ""
+        # ``decrypt_secret`` peels DPAPI then AES, and passes through any
+        # value that carries neither marker — that's how plaintext /
+        # DPAPI-only secrets from older versions keep working. A genuine
+        # failure (corrupted blob, user account changed, wrong key)
+        # returns "", surfaced as ``None`` so the UI prompts a re-login.
+        decrypted = (
+            secure_storage.decrypt_secret(raw_token, profile_id) if raw_token else ""
+        )
         token = decrypted if decrypted else None
         raw_password = d.get("password") if isinstance(d.get("password"), str) else None
-        decrypted_pw = secure_storage.decrypt(raw_password) if raw_password else ""
+        decrypted_pw = (
+            secure_storage.decrypt_secret(raw_password, profile_id)
+            if raw_password
+            else ""
+        )
         password = decrypted_pw if decrypted_pw else None
         return Profile(
-            id=str(d["id"]),
+            id=profile_id,
             name=str(d["name"]),
             token=token,
             email=d.get("email") if isinstance(d.get("email"), str) else None,
